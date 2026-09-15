@@ -30,7 +30,12 @@ train:                    # short CPU run
   log_every: 25
   eval_every: 100
   eval_batches: 10
+  sample_eval_batches: 2
   checkpoint_every: 300
+
+inference:                # cheap sampler for evaluation on CPU
+  samples: 4
+  flow_steps: 16
 
 model:                    # tiny model for CPU smoke runs
   width: 64

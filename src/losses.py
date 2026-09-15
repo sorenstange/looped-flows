@@ -26,7 +26,11 @@ def level_log_probs(logits: torch.Tensor, loss: str) -> torch.Tensor:
     raise ValueError(f"unknown loss {loss!r}")
 
 
+def sample_cross_entropy(logits: torch.Tensor, target: torch.Tensor, loss: str) -> torch.Tensor:
+    """(B,) cross-entropy per sample, averaged over the H steps, of (B, H, K) logits against (B, H) level indices."""
+    return -level_log_probs(logits, loss).gather(-1, target[..., None]).squeeze(-1).mean(dim=1)
+
+
 def level_cross_entropy(logits: torch.Tensor, target: torch.Tensor, loss: str) -> torch.Tensor:
     """Mean cross-entropy of (B, H, K) logits against (B, H) level indices."""
-    log_probs = level_log_probs(logits, loss)
-    return -log_probs.gather(-1, target[..., None]).mean()
+    return sample_cross_entropy(logits, target, loss).mean()

@@ -11,9 +11,11 @@ dependencies = [
     "pandas>=3.0.5",
     "pyarrow>=25.0.1",
     "python-binance>=1.0.37",
+    "python-dotenv>=1.2.3",
     "requests>=2.34.2",
     "torch>=2.14.0",
     "torchvision>=0.29.0",
+    "wandb>=0.30.0",
 ]
 [tool.setuptools.packages.find]
 where = ["src"] 

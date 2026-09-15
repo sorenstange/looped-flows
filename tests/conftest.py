@@ -22,3 +22,9 @@ def make_bars(n: int = 2000, start: str = "2024-01-01", interval: str = "1h", se
 @pytest.fixture
 def bars() -> pd.DataFrame:
     return make_bars()
+
+
+@pytest.fixture(autouse=True)
+def no_wandb(monkeypatch):
+    """Tests never log to Weights & Biases."""
+    monkeypatch.setenv("WANDB_MODE", "disabled")

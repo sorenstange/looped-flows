@@ -95,8 +95,28 @@ class ModelConfig:
 
 
 @dataclass
+class FlowConfig:
+    """Looped-flow training (paper Algorithm 1)."""
+    steps: int = 16  # k: denoising steps per training rollout (each is one optimizer step)
+    time_sampler: str = "sorted"  # sorted: k+1 uniform draws, sorted | random_start: t_0 ~ U[0,1], rest ~ U[t_0, 1]
+    noise_scale: Optional[float] = None  # σ of the noise x_0 ~ N(0, σ² I); null = 1 / sqrt(num_levels)
+    share_noise: bool = True  # one noise sample per rollout (paper); false = fresh noise each step (ablation)
+    pseudotargets: bool = False  # interpolate towards the previous prediction instead of the target (App. D)
+    pseudotarget_ramp_steps: int = 20_000  # pseudotarget probability rises linearly from 0 to 1 over these steps
+
+
+@dataclass
+class WandbConfig:
+    enabled: bool = True  # the API key is read from WANDB_API_KEY (environment or .env); WANDB_MODE=disabled wins
+    project: str = "looped-flows"
+    entity: Optional[str] = None  # null = the key's default entity
+    mode: str = "online"  # online | offline | disabled
+    tags: List[str] = field(default_factory=list)
+
+
+@dataclass
 class TrainConfig:
-    method: str = "direct"  # direct: one denoiser call on an empty trajectory (the direct-predictor baseline)
+    method: str = "direct"  # direct: one call on an empty trajectory (baseline) | looped_flow: Algorithm 1
     max_steps: int = 100_000
     optimizer: str = "adam_atan2"  # adam_atan2 (paper) | adamw
     lr: float = 1e-4
@@ -113,6 +133,7 @@ class TrainConfig:
     log_every: int = 100
     eval_every: int = 2000
     eval_batches: int = 20  # validation batches, evenly spaced over the val split
+    sample_eval_batches: int = 4  # batches for metrics of sampled trajectories (inference settings); 0 = off
     checkpoint_every: int = 10_000
     overfit_samples: Optional[int] = None  # train on the first N train samples with fixed a_0 (sanity check)
     seed: int = 0
@@ -124,12 +145,16 @@ class ActConfig:
     tolerance: float = 0.1  # q target: mean |rounded predicted level - oracle level| <= tolerance
     steps: Optional[int] = None  # compare the first m trajectory steps; null = all H
     loss_weight: float = 0.5  # weight λ of the BCE loss (paper: 0.5)
+    halting: bool = True  # looped flow: a sample stops contributing to later steps once q > 1/2
+    exploration_prob: float = 0.1  # per sample, force a random minimum of 2..k steps before halting (paper: 0.1)
 
 
 @dataclass
 class InferenceConfig:
     """How a trained model's sampled trajectories become the traded allocation (see src.policies.readout_allocation)."""
     samples: int = 16  # K trajectories sampled per decision
+    flow_steps: int = 32  # n: integration steps of the sampler (uniform grid on [0, 1])
+    gamma: float = 5.0  # γ: stochasticity of the sampler; 0 = deterministic Euler integration
     aggregation: str = "mean"  # mean over the K samples | best_q (highest confidence score) | q_weighted
     readout: str = "step"  # step: expected level at readout_step | prefix_mean: mean over steps 1..readout_step
     readout_step: int = 1  # 1-based trajectory step; 1 = next bar's planned position
@@ -153,7 +178,9 @@ class Config:
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
+    flow: FlowConfig = field(default_factory=FlowConfig)
     act: ActConfig = field(default_factory=ActConfig)
+    wandb: WandbConfig = field(default_factory=WandbConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
     oracle_sweep: OracleSweepConfig = field(default_factory=OracleSweepConfig)
     output_dir: str = "outputs"
@@ -245,7 +272,14 @@ def validate(cfg: Config) -> None:
           "model.width must be divisible by model.heads with an even head dimension (RoPE)")
     check(cfg.features.lookback % model.patch_size == 0, "features.lookback must be divisible by model.patch_size")
     train = cfg.train
-    check(train.method in ("direct",), f"train.method={train.method!r}")
+    check(train.method in ("direct", "looped_flow"), f"train.method={train.method!r}")
+    flow = cfg.flow
+    check(flow.steps >= 1, "flow.steps must be >= 1")
+    check(flow.time_sampler in ("sorted", "random_start"), f"flow.time_sampler={flow.time_sampler!r}")
+    check(flow.noise_scale is None or flow.noise_scale > 0, "flow.noise_scale must be null or > 0")
+    check(flow.pseudotarget_ramp_steps >= 1, "flow.pseudotarget_ramp_steps must be >= 1")
+    check(0 <= cfg.act.exploration_prob <= 1, "act.exploration_prob must lie in [0, 1]")
+    check(cfg.wandb.mode in ("online", "offline", "disabled"), f"wandb.mode={cfg.wandb.mode!r}")
     check(train.optimizer in ("adam_atan2", "adamw"), f"train.optimizer={train.optimizer!r}")
     check(train.lr_schedule in ("constant", "cosine"), f"train.lr_schedule={train.lr_schedule!r}")
     check(train.loss in ("stablemax", "softmax"), f"train.loss={train.loss!r}")
@@ -257,12 +291,14 @@ def validate(cfg: Config) -> None:
     check(train.grad_clip is None or train.grad_clip > 0, "train.grad_clip must be null or > 0")
     check(min(train.log_every, train.eval_every, train.eval_batches, train.checkpoint_every) >= 1,
           "train logging / eval / checkpoint intervals must be >= 1")
+    check(train.sample_eval_batches >= 0, "train.sample_eval_batches must be >= 0")
     check(train.overfit_samples is None or train.overfit_samples >= 1, "train.overfit_samples must be null or >= 1")
     check(cfg.act.tolerance >= 0, "act.tolerance must be >= 0")
     check(cfg.act.steps is None or 1 <= cfg.act.steps <= cfg.oracle.horizon, "act.steps must lie in 1..oracle.horizon")
     check(cfg.act.loss_weight >= 0, "act.loss_weight must be >= 0")
     inference = cfg.inference
     check(inference.samples >= 1, "inference.samples must be >= 1")
+    check(inference.flow_steps >= 1 and inference.gamma >= 0, "inference.flow_steps must be >= 1, gamma >= 0")
     check(inference.aggregation in ("mean", "best_q", "q_weighted"), f"inference.aggregation={inference.aggregation!r}")
     check(inference.readout in ("step", "prefix_mean"), f"inference.readout={inference.readout!r}")
     check(1 <= inference.readout_step <= cfg.oracle.horizon, "inference.readout_step must lie in 1..oracle.horizon")

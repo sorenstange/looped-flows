@@ -65,9 +65,27 @@ model selection and sweeps use train / val.
   - smoke (CPU, 0.12M params, 300 steps, softmax + AdamW): val CE 3.04 → 2.71, step accuracy 0.157 vs 0.099 for
     "keep the current position", first-step MAE 0.48 → 0.26; overfitting 64 real samples reaches CE 0.78, MAE 0.05
   - StableMax + Adam-atan2 (paper) barely learned in the same 300 steps; compare both on the cluster
-- [ ] **Looped-flow training** (Algorithm 1): sorted flow times, shared `(c, x0, x1)`, stop-gradient between steps,
+- [x] **Looped-flow training** (Algorithm 1): sorted flow times, shared `(c, x0, x1)`, stop-gradient between steps,
   ACT loss and halting, optional pseudotargets; EMA, warmup, gradient clipping, checkpointing, metric logging
-- [ ] **Sampler** (Algorithm 2): noise backtracking with `γ`; test that `γ = 0` equals Euler integration
+  - `train.method: looped_flow`, `flow` config (k = 16, sorted / random-start times, σ = 1/√21, shared noise,
+    pseudotargets with ramp), per-sample halting with exploration (`act.halting`, `act.exploration_prob`); one
+    optimizer step per flow step; evaluation = teacher-forced rollout on the grid t_i = i/k with metrics averaged
+    over steps, at the first step (pure noise) and at the last step
+  - Weights & Biases logging (`wandb` config, key from `.env`), project `looped-flows`; tests force it off
+  - smoke (CPU, 300 steps): val CE at t = 15/16 falls to 0.37, but CE at t = 0 stays ≈ 3.19 (no better than chance).
+    The late-step metrics are inflated by the nearly revealed target in the interpolant; generation quality needs the
+    sampler (next item)
+- [x] **Sampler** (Algorithm 2): noise backtracking with `γ`; test that `γ = 0` equals Euler integration
+  - `src/sampling.py`: `sample` (K samples per decision, uniform grid with `inference.flow_steps`, `inference.gamma`,
+    recurrent state carried across steps), `predict` (direct: one prediction; looped flow: sampler), `backtrack`
+  - tests: γ = 0 equals Euler (Eq. 8); an ideal denoiser lands exactly on the solution for γ ∈ {0, 1, 5};
+    backtracking preserves the interpolant marginal N(s x₁, σ²(1 − s)²)
+  - evaluation now includes metrics of sampled trajectories for both methods (`sample_*`: MAE of the mean expected
+    level vs. the oracle, accuracy, spread across samples, PnL of the mean trajectory on the true future returns
+    relative to the oracle)
+  - smoke checkpoints (300 CPU steps) on val: direct predictor first-step MAE 0.25, looped flow 0.49 (chance level;
+    its t = 0 denoising had not learned yet), both with negative PnL: too little training to judge the method.
+    Sampling at K = 16, n = 32 on CPU took ~24 min for 512 decisions, so sampled evaluation and backtests need GPUs
 - [ ] **Model policy** for the backtest: sample K trajectories per bar, feed their level probabilities (and confidence
   scores) to `readout_allocation`; batch decisions efficiently where possible
 - [ ] **Smoke run** on `configs/smoke.yaml` on CPU: loss decreases, sampler produces valid trajectories, backtest runs

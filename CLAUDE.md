@@ -65,10 +65,20 @@ over 21 levels in [-1, 1] for BTCUSDT perpetuals, trained on a cost-aware, rate-
   `DenoiserOutput(logits, q_logit, state)`; building blocks `RotaryEmbedding`, `Attention`, `SwiGLU`, `Block`
 - `src/losses.py`: `log_stablemax` (safe `torch.where` branches), `level_log_probs`, `level_cross_entropy`
 - `src/optim.py`: `AdamAtan2`, `make_optimizer`, `lr_factor` (warmup + constant/cosine)
-- `src/training.py`: `FORWARD` per `train.method` (`direct_forward`), `losses_and_metrics` (CE + weighted confidence
-  BCE; metrics incl. the "keep current position" baseline `acc_hold`), `evaluate`, `train` (EMA, clipping, bf16 on CUDA,
-  fails fast on non-finite loss), `save_checkpoint` / `load_model`
-- still to come as separate modules under `src/`: looped-flow training (Alg. 1) in `src/training.py`, sampler (Alg. 2)
+- `src/training.py`: `Trainer` (`optimize` = one optimizer step + logging / eval / checkpoints when due; batch steps
+  for `direct` and `looped_flow` (Alg. 1: `sample_flow_times`, `interpolant`, shared noise, halting, pseudotargets)),
+  `losses_and_metrics` (per-sample masked CE + confidence BCE; metrics incl. the "keep current position" baseline
+  `acc_hold`), `evaluate` (flow: teacher-forced grid, `*_first_t` / `*_last_t`), `WandbLogger`, `train`,
+  `save_checkpoint` / `load_model`
+- `src/sampling.py`: `sample` (Alg. 2: K samples, noise backtracking with γ, recurrent state carried), `predict`
+  (dispatch per `train.method`), `backtrack`; `training.sample_metrics` evaluates generated trajectories
+- still to come under `src/`: the model policy for the backtest
+- Sampling is expensive (n denoiser calls × K samples per decision): on CPU only with `configs/smoke.yaml` settings
+- Teacher-forced late-step flow metrics are inflated (the interpolant nearly contains the target); judge models by
+  first-step metrics, sampled trajectories and backtests
+- Weights & Biases: `wandb` config; `WandbLogger` loads `WANDB_API_KEY` from `.env` (git-ignored; never print, log
+  or commit it). Tests disable it via `WANDB_MODE=disabled` in `tests/conftest.py`; set `wandb.enabled=false` for
+  throwaway local runs
 - Paper-size models are far too slow for CPU (~8 s per forward+backward at batch 8); use `configs/smoke.yaml` locally
 - `scripts/`: entry points (`prepare_data.py`, `backtest.py`, `sweep_oracle.py`); `tests/`: pytest suite (synthetic data, no network;
   `conftest.make_bars`, `test_backtest.toy_market`)

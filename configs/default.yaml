@@ -60,7 +60,7 @@ model:                    # denoiser backbone (paper Appendix A / TRM)
   norm_eps: 1.0e-5
 
 train:
-  method: direct          # direct: one denoiser call on an empty trajectory (direct-predictor baseline)
+  method: direct          # direct: one call on an empty trajectory (baseline) | looped_flow: Algorithm 1
   max_steps: 100000
   optimizer: adam_atan2   # adam_atan2 (paper) | adamw
   lr: 1.0e-4
@@ -77,17 +77,37 @@ train:
   log_every: 100
   eval_every: 2000
   eval_batches: 20        # validation batches, evenly spaced over the val split
+  sample_eval_batches: 4  # batches for metrics of sampled trajectories (inference settings); 0 = off
   checkpoint_every: 10000
   overfit_samples: null   # train on the first N train samples with fixed a_0 (sanity check)
   seed: 0
+
+flow:                     # looped-flow training (paper Algorithm 1)
+  steps: 16               # k: denoising steps per training rollout (each is one optimizer step)
+  time_sampler: sorted    # sorted: k+1 uniform draws, sorted | random_start: t_0 ~ U[0,1], rest ~ U[t_0, 1]
+  noise_scale: null       # σ of the noise x_0 ~ N(0, σ² I); null = 1 / sqrt(num_levels)
+  share_noise: true       # one noise sample per rollout (paper); false = fresh noise each step (ablation)
+  pseudotargets: false    # interpolate towards the previous prediction instead of the target (App. D)
+  pseudotarget_ramp_steps: 20000  # pseudotarget probability rises linearly from 0 to 1 over these steps
 
 act:                      # confidence head q (the paper's ACT head)
   tolerance: 0.1          # q target: mean |rounded predicted level - oracle level| <= tolerance
   steps: null             # compare the first m trajectory steps; null = all H
   loss_weight: 0.5        # weight of the BCE loss (paper: 0.5)
+  halting: true           # looped flow: a sample stops contributing to later steps once q > 1/2
+  exploration_prob: 0.1   # per sample, force a random minimum of 2..k steps before halting (paper: 0.1)
+
+wandb:
+  enabled: true           # API key from WANDB_API_KEY (environment or .env); env WANDB_MODE=disabled wins
+  project: looped-flows
+  entity: null            # null = the key's default entity
+  mode: online            # online | offline | disabled
+  tags: []
 
 inference:                # how sampled trajectories become the traded allocation
   samples: 16             # K trajectories sampled per decision
+  flow_steps: 32          # n: integration steps of the sampler (uniform grid on [0, 1])
+  gamma: 5.0              # stochasticity of the sampler; 0 = deterministic Euler integration
   aggregation: mean       # mean over the K samples | best_q (highest confidence score) | q_weighted
   readout: step           # step: expected level at readout_step | prefix_mean: mean over steps 1..readout_step
   readout_step: 1         # 1-based trajectory step; 1 = next bar's planned position
