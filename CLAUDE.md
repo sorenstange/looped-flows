@@ -28,6 +28,9 @@ over 21 levels in [-1, 1] for BTCUSDT perpetuals, trained on a cost-aware, rate-
   - data prep / oracle report: `uv run python -m scripts.prepare_data --config configs/smoke.yaml`
   - backtest: `uv run python -m scripts.backtest --config configs/default.yaml data.update=false`
   - oracle upper-bound sweep: `uv run python -m scripts.sweep_oracle --config configs/default.yaml data.update=false`
+  - training: `uv run python -m scripts.train --config configs/smoke.yaml data.update=false` (outputs in
+    `outputs/train/<timestamp>-<method>/`: config.yaml, metrics.jsonl, checkpoints/); add `train.overfit_samples=64`
+    for a memorization check. The smoke config uses softmax + AdamW; the paper defaults are for the cluster.
   - list-valued overrides need quoting in PowerShell: `"backtest.policies=[buy_hold,ma_crossover]"`
 - **Application Control blocks `pyexpat`.** Anything that imports `xml.parsers.expat` fails (e.g. `pypdf`).
   Avoid such packages, or run them isolated.
@@ -57,9 +60,16 @@ over 21 levels in [-1, 1] for BTCUSDT perpetuals, trained on a cost-aware, rate-
   `oracle_step` per bar), `make_policy`, and `readout_allocation` (K sampled trajectories' level probabilities →
   traded allocation, per `inference` config). Model policies will go here too.
 - `src/backtest.py` also has `decision_range`: the decision bars of a split, shared by all backtest scripts.
-- `src/modules.py` (empty): denoiser (joint-sequence transformer, RoPE, SwiGLU, RMSNorm, two-state (h, ℓ)
-  recurrence), ACT head
-- still to come as separate modules under `src/`: training loop, sampler (Alg. 2)
+- `src/modules.py`: `Denoiser` (one call = one flow step; token layout [Q] | context | a_0 | trajectory; TRM
+  recurrence with only the last cycle backpropagated; detaches the incoming `RecurrentState`), returns
+  `DenoiserOutput(logits, q_logit, state)`; building blocks `RotaryEmbedding`, `Attention`, `SwiGLU`, `Block`
+- `src/losses.py`: `log_stablemax` (safe `torch.where` branches), `level_log_probs`, `level_cross_entropy`
+- `src/optim.py`: `AdamAtan2`, `make_optimizer`, `lr_factor` (warmup + constant/cosine)
+- `src/training.py`: `FORWARD` per `train.method` (`direct_forward`), `losses_and_metrics` (CE + weighted confidence
+  BCE; metrics incl. the "keep current position" baseline `acc_hold`), `evaluate`, `train` (EMA, clipping, bf16 on CUDA,
+  fails fast on non-finite loss), `save_checkpoint` / `load_model`
+- still to come as separate modules under `src/`: looped-flow training (Alg. 1) in `src/training.py`, sampler (Alg. 2)
+- Paper-size models are far too slow for CPU (~8 s per forward+backward at batch 8); use `configs/smoke.yaml` locally
 - `scripts/`: entry points (`prepare_data.py`, `backtest.py`, `sweep_oracle.py`); `tests/`: pytest suite (synthetic data, no network;
   `conftest.make_bars`, `test_backtest.toy_market`)
 - Raw and cached market data goes under `data/`, checkpoints under `checkpoints/`, and run outputs under `runs/` or

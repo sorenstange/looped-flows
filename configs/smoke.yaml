@@ -17,3 +17,24 @@ splits:
 
 loader:
   batch_size: 64
+
+train:                    # short CPU run
+  max_steps: 300
+  # StableMax + Adam-atan2 (the paper defaults) barely move in 300 steps at this scale; softmax + AdamW show learning.
+  loss: softmax
+  optimizer: adamw
+  weight_decay: 0.0
+  lr: 1.0e-3
+  warmup_steps: 30
+  ema_decay: 0.99
+  log_every: 25
+  eval_every: 100
+  eval_batches: 10
+  checkpoint_every: 300
+
+model:                    # tiny model for CPU smoke runs
+  width: 64
+  heads: 4
+  mlp_width: 192
+  inner_steps: 2
+  patch_size: 4

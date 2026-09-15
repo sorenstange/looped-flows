@@ -52,11 +52,19 @@ model selection and sweeps use train / val.
   taker-buy share of volume, trailing z-score (user)
 
 ## Phase 3 — Model and training (CPU smoke tests first)
-- [ ] **Backbone** (`src/modules.py`): input projections (context features, `a_0`, noisy one-hot trajectory), time
-  embedding, noncausal transformer with RoPE, SwiGLU, RMSNorm, TRM-style (h, ℓ) recurrence, output head, ACT head;
-  shape and gradient tests
-- [ ] **Direct predictor** (same backbone, no flow, no loop) + minimal training loop: the first learned baseline, and a
+- [x] **Backbone** (`src/modules.py`): input projections (context features, `a_0`, noisy one-hot trajectory), time
+  embedding, noncausal transformer with RoPE, SwiGLU, RMSNorm, TRM-style (h, ℓ) recurrence, output head, ACT head via a
+  [Q] token; `model` config (patching optional); tests for shapes, last-cycle-only gradients, detached state, batch
+  independence, input sensitivity. Paper size 7.11M parameters
+- [x] **Direct predictor** (same backbone, no flow, no loop) + minimal training loop: the first learned baseline, and a
   check that data, model and optimization work end to end (overfit a tiny subset)
+  - `src/training.py` (`train.method: direct`), `src/losses.py` (StableMax, softmax), `src/optim.py` (Adam-atan2,
+    AdamW, warmup + constant/cosine), EMA, bf16 on CUDA, eval on evenly spaced val batches, JSONL metrics,
+    checkpoints with embedded config (`load_model`), `scripts/train.py`
+  - fixed a NaN: StableMax's unused `torch.where` branch had an infinite gradient at logit 1.0
+  - smoke (CPU, 0.12M params, 300 steps, softmax + AdamW): val CE 3.04 → 2.71, step accuracy 0.157 vs 0.099 for
+    "keep the current position", first-step MAE 0.48 → 0.26; overfitting 64 real samples reaches CE 0.78, MAE 0.05
+  - StableMax + Adam-atan2 (paper) barely learned in the same 300 steps; compare both on the cluster
 - [ ] **Looped-flow training** (Algorithm 1): sorted flow times, shared `(c, x0, x1)`, stop-gradient between steps,
   ACT loss and halting, optional pseudotargets; EMA, warmup, gradient clipping, checkpointing, metric logging
 - [ ] **Sampler** (Algorithm 2): noise backtracking with `γ`; test that `γ = 0` equals Euler integration
@@ -67,6 +75,8 @@ model selection and sweeps use train / val.
 ## Phase 4 — Experiments (cluster)
 - [ ] Cluster setup: CUDA torch, run scripts, output syncing
 - [ ] Train direct predictor and looped flow on the default config; compare on val
+- [ ] Loss and optimizer: StableMax + Adam-atan2 (paper) vs. softmax + AdamW at full scale (the paper setting learned
+  far slower in the CPU smoke run)
 - [ ] Hyperparameter selection on val (lookback, `H`, model size, k, σ, learning rate)
 - [ ] Target smoothness vs. learnability: train with max step 0.1 and 0.2 (the oracle sweep cannot measure
   learnability) and compare on val

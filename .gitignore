@@ -30,3 +30,7 @@ logs/
 # Notebooks / tooling
 .ipynb_checkpoints/
 .pytest_cache/
+
+# Sensitive
+.env
+2026_suleymanzade_looped-flows.pdf

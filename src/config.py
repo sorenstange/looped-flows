@@ -81,6 +81,44 @@ class BacktestConfig:
 
 
 @dataclass
+class ModelConfig:
+    """Denoiser backbone (paper Appendix A / TRM): shared transformer F applied in a two-state recurrence."""
+    width: int = 512  # hidden size d
+    heads: int = 8
+    layers: int = 2  # transformer blocks in the shared network F
+    mlp_width: int = 1536  # SwiGLU intermediate size
+    cycles: int = 3  # recurrence cycles per denoiser call; only the last one is backpropagated
+    inner_steps: int = 4  # ℓ updates per cycle (m in the paper)
+    patch_size: int = 1  # context bars per context token; features.lookback must be divisible by it
+    rope_base: float = 10000.0
+    norm_eps: float = 1e-5
+
+
+@dataclass
+class TrainConfig:
+    method: str = "direct"  # direct: one denoiser call on an empty trajectory (the direct-predictor baseline)
+    max_steps: int = 100_000
+    optimizer: str = "adam_atan2"  # adam_atan2 (paper) | adamw
+    lr: float = 1e-4
+    betas: List[float] = field(default_factory=lambda: [0.9, 0.95])
+    weight_decay: float = 0.1
+    warmup_steps: int = 2000
+    lr_schedule: str = "constant"  # constant | cosine (decays to min_lr_ratio * lr at max_steps)
+    min_lr_ratio: float = 0.1
+    grad_clip: Optional[float] = 1.0  # max gradient norm; null = no clipping
+    ema_decay: Optional[float] = 0.999  # parameter EMA used for evaluation and checkpoints; null = no EMA
+    loss: str = "stablemax"  # stablemax (paper) | softmax cross-entropy
+    device: str = "auto"  # auto | cpu | cuda
+    precision: str = "bf16"  # bf16 (autocast on CUDA only) | fp32
+    log_every: int = 100
+    eval_every: int = 2000
+    eval_batches: int = 20  # validation batches, evenly spaced over the val split
+    checkpoint_every: int = 10_000
+    overfit_samples: Optional[int] = None  # train on the first N train samples with fixed a_0 (sanity check)
+    seed: int = 0
+
+
+@dataclass
 class ActConfig:
     """Confidence head q (the paper's ACT head): halting during training, optional use at inference."""
     tolerance: float = 0.1  # q target: mean |rounded predicted level - oracle level| <= tolerance
@@ -113,6 +151,8 @@ class Config:
     splits: SplitConfig = field(default_factory=SplitConfig)
     loader: LoaderConfig = field(default_factory=LoaderConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    train: TrainConfig = field(default_factory=TrainConfig)
     act: ActConfig = field(default_factory=ActConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
     oracle_sweep: OracleSweepConfig = field(default_factory=OracleSweepConfig)
@@ -132,6 +172,17 @@ def save_config(cfg: Config, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     OmegaConf.save(OmegaConf.structured(cfg), path)
+
+
+def config_to_dict(cfg: Config) -> dict:
+    """Plain-dict form of a config, e.g. for embedding in checkpoints."""
+    return OmegaConf.to_container(OmegaConf.structured(cfg))
+
+
+def config_from_dict(data: dict) -> Config:
+    cfg: Config = OmegaConf.to_object(OmegaConf.merge(OmegaConf.structured(Config), data))
+    validate(cfg)
+    return cfg
 
 
 def parse_args(description: str | None = None, argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -187,6 +238,26 @@ def validate(cfg: Config) -> None:
     baselines = cfg.backtest.baselines
     check(0 < baselines.ma_fast < baselines.ma_slow, "backtest.baselines needs 0 < ma_fast < ma_slow")
     check(baselines.momentum_window > 0, "backtest.baselines.momentum_window must be > 0")
+    model = cfg.model
+    check(min(model.width, model.heads, model.layers, model.mlp_width, model.cycles, model.inner_steps,
+              model.patch_size) >= 1, "model sizes and counts must be >= 1")
+    check(model.width % model.heads == 0 and (model.width // model.heads) % 2 == 0,
+          "model.width must be divisible by model.heads with an even head dimension (RoPE)")
+    check(cfg.features.lookback % model.patch_size == 0, "features.lookback must be divisible by model.patch_size")
+    train = cfg.train
+    check(train.method in ("direct",), f"train.method={train.method!r}")
+    check(train.optimizer in ("adam_atan2", "adamw"), f"train.optimizer={train.optimizer!r}")
+    check(train.lr_schedule in ("constant", "cosine"), f"train.lr_schedule={train.lr_schedule!r}")
+    check(train.loss in ("stablemax", "softmax"), f"train.loss={train.loss!r}")
+    check(train.device in ("auto", "cpu", "cuda"), f"train.device={train.device!r}")
+    check(train.precision in ("bf16", "fp32"), f"train.precision={train.precision!r}")
+    check(train.max_steps >= 1 and train.lr > 0 and train.warmup_steps >= 0, "train steps / lr out of range")
+    check(len(train.betas) == 2 and all(0 <= b < 1 for b in train.betas), "train.betas must be two values in [0, 1)")
+    check(train.ema_decay is None or 0 < train.ema_decay < 1, "train.ema_decay must be null or in (0, 1)")
+    check(train.grad_clip is None or train.grad_clip > 0, "train.grad_clip must be null or > 0")
+    check(min(train.log_every, train.eval_every, train.eval_batches, train.checkpoint_every) >= 1,
+          "train logging / eval / checkpoint intervals must be >= 1")
+    check(train.overfit_samples is None or train.overfit_samples >= 1, "train.overfit_samples must be null or >= 1")
     check(cfg.act.tolerance >= 0, "act.tolerance must be >= 0")
     check(cfg.act.steps is None or 1 <= cfg.act.steps <= cfg.oracle.horizon, "act.steps must lie in 1..oracle.horizon")
     check(cfg.act.loss_weight >= 0, "act.loss_weight must be >= 0")

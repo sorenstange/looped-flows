@@ -48,6 +48,39 @@ backtest:
     ma_slow: 2016         # bars in the slow moving average (1 week at 5m)
     momentum_window: 2016 # bars over which the momentum return is measured (1 week at 5m)
 
+model:                    # denoiser backbone (paper Appendix A / TRM)
+  width: 512              # hidden size
+  heads: 8
+  layers: 2               # transformer blocks in the shared network F
+  mlp_width: 1536         # SwiGLU intermediate size
+  cycles: 3               # recurrence cycles per denoiser call; only the last one is backpropagated
+  inner_steps: 4          # ℓ updates per cycle (m in the paper)
+  patch_size: 1           # context bars per context token; lookback must be divisible by it
+  rope_base: 10000.0
+  norm_eps: 1.0e-5
+
+train:
+  method: direct          # direct: one denoiser call on an empty trajectory (direct-predictor baseline)
+  max_steps: 100000
+  optimizer: adam_atan2   # adam_atan2 (paper) | adamw
+  lr: 1.0e-4
+  betas: [0.9, 0.95]
+  weight_decay: 0.1
+  warmup_steps: 2000
+  lr_schedule: constant   # constant | cosine (decays to min_lr_ratio * lr at max_steps)
+  min_lr_ratio: 0.1
+  grad_clip: 1.0          # max gradient norm; null = no clipping
+  ema_decay: 0.999        # parameter EMA for evaluation and checkpoints; null = no EMA
+  loss: stablemax         # stablemax (paper) | softmax
+  device: auto            # auto | cpu | cuda
+  precision: bf16         # bf16 (autocast on CUDA only) | fp32
+  log_every: 100
+  eval_every: 2000
+  eval_batches: 20        # validation batches, evenly spaced over the val split
+  checkpoint_every: 10000
+  overfit_samples: null   # train on the first N train samples with fixed a_0 (sanity check)
+  seed: 0
+
 act:                      # confidence head q (the paper's ACT head)
   tolerance: 0.1          # q target: mean |rounded predicted level - oracle level| <= tolerance
   steps: null             # compare the first m trajectory steps; null = all H

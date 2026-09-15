@@ -104,16 +104,28 @@ Design choices:
   std 0.0023 to 0.0017, i.e. the regime shift is absorbed; `log_vol_to_cost` averages 1.25 (train) and 1.08 (val);
   the z-scored taker-buy share has std 1.00 on both splits and is never clipped.
 
-**Backbone**: a single non-causal transformer with rotary position embeddings over one joint sequence
+**Backbone** (`src/modules.py`, `model` config): a single non-causal transformer with rotary position embeddings over
+one joint sequence
 
 ```
-[ context tokens (lookback) | a_0 token | H trajectory tokens ]
+[ [Q] | context tokens (lookback / patch_size) | a_0 token | H trajectory tokens ]
 ```
 
-Only the trajectory tokens are noised. Context and `a_0` tokens are clean conditioning, as in the paper's ARC setup.
-The denoiser follows the paper and TRM: flow-time embedding, a projection of the noisy one-hot interpolant, and a
-two-state recurrence `z = (h, ℓ)` carried across flow steps with stop-gradient between steps. Target scale is
-paper-sized (~5–7M parameters).
+- **Inputs**: context features (optionally `patch_size` bars per token, bias-free projection), `a_0` (scalar
+  projection), noisy one-hot trajectory (bias-free projection), a learned segment embedding per token type, and a
+  flow-time MLP (1 → width → width, SiLU) added to every token. Only the trajectory tokens are noised; context and
+  `a_0` are clean conditioning, as in the paper's ARC setup.
+- **Recurrence** (paper Eq. 15 / TRM): shared network F = `layers` post-norm blocks (attention + SwiGLU, RMSNorm after
+  each residual). One denoiser call runs `cycles` = 3 times: `ℓ ← F(ℓ + h + e)` (`inner_steps` = 4 times), then
+  `h ← F(h + ℓ)`. The first cycles run without gradients, only the last is backpropagated, and the incoming state
+  `z = (h, ℓ)` is detached (stop-gradient between flow steps).
+- **Outputs**: 21 level logits per trajectory step from `h` at the trajectory tokens; confidence logit `q` from `h` at
+  a learnable **[Q] token** (initialized to output ≈ 0, as in TRM, so training does not halt early).
+- **Size**: paper default width 512, 8 heads, 2 layers, SwiGLU 1536 → **7.11M parameters**, 322 tokens.
+  `configs/smoke.yaml` uses a 0.12M model (width 64, patch 4) for CPU runs.
+- **Cost**: one forward + backward call at paper size takes ~8.4 s for a batch of 8 on CPU (4 threads), so real
+  training needs GPUs. `patch_size: 4` (130 tokens) is ~2.7× faster; one token per bar stays the default, and patching
+  is the first lever if cluster throughput is too low.
 
 ## Looped-flow components (first version)
 - **Temporally aligned training**: `k` sorted flow times with decreasing noise, with the triplet `(c, x0, x1)` (noise
