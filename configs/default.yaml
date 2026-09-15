@@ -12,7 +12,9 @@ data:
 
 features:
   lookback: 256           # context bars per sample
-  standardize: [log_volume]  # features z-scored over each window
+  scaling: rolling        # rolling: trailing-window scaling | window: log volume z-scored per sample window
+  rolling_window: 2016    # bars of trailing statistics (1 week at 5m); also used by log_vol_to_cost
+  clip: 10.0              # clip context features to [-clip, clip]; null = no clipping
 
 oracle:
   horizon: 64             # trajectory length H in bars
@@ -46,9 +48,14 @@ backtest:
     ma_slow: 2016         # bars in the slow moving average (1 week at 5m)
     momentum_window: 2016 # bars over which the momentum return is measured (1 week at 5m)
 
+act:                      # confidence head q (the paper's ACT head)
+  tolerance: 0.1          # q target: mean |rounded predicted level - oracle level| <= tolerance
+  steps: null             # compare the first m trajectory steps; null = all H
+  loss_weight: 0.5        # weight of the BCE loss (paper: 0.5)
+
 inference:                # how sampled trajectories become the traded allocation
   samples: 16             # K trajectories sampled per decision
-  aggregation: mean       # mean over the K samples | best_q (sample with the highest confidence score)
+  aggregation: mean       # mean over the K samples | best_q (highest confidence score) | q_weighted
   readout: step           # step: expected level at readout_step | prefix_mean: mean over steps 1..readout_step
   readout_step: 1         # 1-based trajectory step; 1 = next bar's planned position
 

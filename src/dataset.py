@@ -13,7 +13,7 @@ from torch.utils.data import BatchSampler, DataLoader, Dataset, RandomSampler, S
 
 from src.config import Config, SplitConfig
 from src.data import clean_ohlcv, load_ohlcv, to_utc
-from src.features import FEATURE_NAMES, bar_features, standardize_windows
+from src.features import ACTIVITY_FEATURES, FEATURE_NAMES, bar_features, standardize_windows
 from src.oracle import bar_returns, make_levels, oracle_trajectory
 
 SPLITS = ("train", "val", "test")
@@ -25,20 +25,20 @@ class MarketData:
     close: np.ndarray  # (T,) float64
     features: np.ndarray  # (T, F) float32, see src.features.FEATURE_NAMES
     returns: np.ndarray  # (T,) float64, return of bar t from close t-1 to close t
-    valid: np.ndarray  # (T,) bool
+    valid: np.ndarray  # (T,) bool; False for bad bars and for the feature warmup
 
     @classmethod
-    def from_bars(cls, bars: pd.DataFrame, return_type: str) -> "MarketData":
+    def from_bars(cls, bars: pd.DataFrame, cfg: Config) -> "MarketData":
         """Build from the output of `clean_ohlcv`."""
         close = bars["close"].to_numpy(dtype=np.float64)
-        features = bar_features(bars)
-        returns = bar_returns(close, return_type)
-        valid = bars["valid"].to_numpy() & np.isfinite(features[:, 1:]).all(axis=1)
+        features = bar_features(bars, cfg.features.scaling, cfg.features.rolling_window, cfg.oracle.cost)
+        returns = bar_returns(close, cfg.oracle.return_type)
+        valid = bars["valid"].to_numpy() & np.isfinite(features).all(axis=1) & np.isfinite(returns)
         return cls(bars.index, close, features, returns, valid)
 
     @classmethod
     def load(cls, cfg: Config) -> "MarketData":
-        return cls.from_bars(clean_ohlcv(load_ohlcv(cfg.data), cfg.data.interval), cfg.oracle.return_type)
+        return cls.from_bars(clean_ohlcv(load_ohlcv(cfg.data), cfg.data.interval), cfg)
 
 
 def split_ranges(times: pd.DatetimeIndex, splits: SplitConfig, lookback: int, horizon: int) -> dict[str, tuple[int, int]]:
@@ -74,7 +74,9 @@ class WindowDataset(Dataset):
         self.max_step = cfg.oracle.max_step
         self.levels = make_levels(cfg.oracle.num_levels)
         self.initial_position = cfg.oracle.initial_position
-        self.standardize = [FEATURE_NAMES.index(name) for name in cfg.features.standardize]
+        self.standardize = ([FEATURE_NAMES.index(name) for name in ACTIVITY_FEATURES]
+                            if cfg.features.scaling == "window" else [])
+        self.clip = cfg.features.clip
         self.seed = seed
         self.epoch = 0
 
@@ -91,6 +93,8 @@ class WindowDataset(Dataset):
         future_bars = anchors[:, None] + np.arange(1, self.horizon + 1)
 
         context = standardize_windows(torch.from_numpy(self.market.features[context_bars]), self.standardize)
+        if self.clip is not None:
+            context = context.clamp(-self.clip, self.clip)
         returns = torch.from_numpy(self.market.returns[future_bars])
         a0 = self.initial_positions(anchors)
         target, pnl = oracle_trajectory(returns, a0, self.levels, self.cost, self.max_step)

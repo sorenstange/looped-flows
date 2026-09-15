@@ -23,8 +23,9 @@ def readout_allocation(probs: torch.Tensor, levels: torch.Tensor, readout: str =
         readout: "step" uses the expected level at `readout_step`; "prefix_mean" averages steps 1..readout_step.
         readout_step: 1-based trajectory step.
         aggregation: "mean" averages the per-sample values (the Monte Carlo expected position; uncertainty across
-            samples becomes position size); "best_q" takes the sample with the highest confidence score.
-        scores: (K,) confidence scores, required for "best_q".
+            samples becomes position size); "best_q" takes the sample with the highest confidence score; "q_weighted"
+            averages with weights proportional to the scores.
+        scores: (K,) non-negative confidence scores, required for "best_q" and "q_weighted".
     """
     expected = probs.to(torch.float64) @ levels.to(torch.float64)  # (K, H)
     if readout == "step":
@@ -35,11 +36,16 @@ def readout_allocation(probs: torch.Tensor, levels: torch.Tensor, readout: str =
         raise ValueError(f"unknown readout {readout!r}")
     if aggregation == "mean":
         return per_sample.mean().item()
+    if aggregation not in ("best_q", "q_weighted"):
+        raise ValueError(f"unknown aggregation {aggregation!r}")
+    if scores is None:
+        raise ValueError(f"aggregation={aggregation!r} needs confidence scores")
     if aggregation == "best_q":
-        if scores is None:
-            raise ValueError("aggregation='best_q' needs confidence scores")
         return per_sample[scores.argmax()].item()
-    raise ValueError(f"unknown aggregation {aggregation!r}")
+    weights = scores.to(torch.float64).clamp(min=0)
+    if weights.sum() <= 0:
+        return per_sample.mean().item()
+    return (per_sample * weights).sum().item() / weights.sum().item()
 
 
 class ConstantPolicy(Policy):

@@ -73,11 +73,36 @@ s.t.   a_t ∈ {-1, -0.9, ..., 0.9, 1}
   between consecutive sets so that no window or oracle horizon overlaps across them.
 
 ## Model
-**Inputs (conditioning `c`)**: stationary per-bar features computed from the lookback window:
-- log return `log(close_t / close_{t−1})`
-- open, high and low relative to close (log ratios)
-- log volume (`log1p`), z-scored over the window
-- plus the current position `a_0`
+**Inputs (conditioning `c`)**: six per-bar features for each of the `lookback` context bars, plus the current
+position `a_0`. Scaling uses **trailing (rolling) statistics** over `features.rolling_window` bars (default 2016 =
+1 week at 5m, longer than the lookback), computed causally per bar including the bar itself:
+
+| Feature           | Definition                                           | Scaling (`features.scaling: rolling`)               |
+|-------------------|------------------------------------------------------|-----------------------------------------------------|
+| `log_return`      | `log(close_t / close_{t−1})`                         | ÷ trailing RMS of log returns                       |
+| `log_high_close`  | `log(high_t / close_t)`                              | ÷ trailing RMS of log returns                       |
+| `log_low_close`   | `log(low_t / close_t)`                               | ÷ trailing RMS of log returns                       |
+| `taker_buy_share` | `taker_buy_volume_t / volume_t` (0.5 if no volume)   | trailing z-score (mean and std)                     |
+| `log_volume`      | `log1p(volume_t)`                                    | trailing z-score (mean and std)                     |
+| `log_vol_to_cost` | `log(trailing RMS of log returns / oracle.cost)`     | none (unitless; ~0–3 at 5m)                         |
+
+Design choices:
+- **Divide only, no mean subtraction for price features**: the trailing mean of 5m returns is noise, and subtracting
+  it would remove drift. One common scale for all price features keeps their relative sizes (range vs. return).
+- **`log_vol_to_cost` restores the volatility level** that rolling scaling removes: whether moves cover the fixed cost
+  is what the oracle depends on.
+- **Clipping** to ±10 (`features.clip`) against flash moves (~0.05% of bars at 5m). A value can be at most
+  √window times the trailing RMS that includes it (≈ 45 for 2016 bars), so the clip is what bounds outliers.
+- The first `rolling_window` bars of the data are invalid (warmup; 5m data starts being usable on 2019-10-08).
+- **No open-based feature**: on Binance perpetuals each bar opens at the previous close, so `log(open / close)` equals
+  `-log_return`. The **taker-buy share** (aggressive buying as a fraction of volume) takes its place: it is a
+  buying-pressure signal the other channels do not contain. Its spread varies by regime (yearly std 0.09–0.15 at 5m),
+  hence the trailing z-score.
+- `features.scaling: window` keeps the earlier variant (unscaled price features, taker-buy share and log volume
+  z-scored per sample window) for comparison.
+- Check on 5m data: scaled log returns have std 1.03 on train and 1.02 on val, while raw 5m log returns fall from
+  std 0.0023 to 0.0017, i.e. the regime shift is absorbed; `log_vol_to_cost` averages 1.25 (train) and 1.08 (val);
+  the z-scored taker-buy share has std 1.00 on both splits and is never clipped.
 
 **Backbone**: a single non-causal transformer with rotary position embeddings over one joint sequence
 
@@ -93,10 +118,13 @@ paper-sized (~5–7M parameters).
 ## Looped-flow components (first version)
 - **Temporally aligned training**: `k` sorted flow times with decreasing noise, with the triplet `(c, x0, x1)` (noise
   included) shared across all steps of a rollout.
-- **ACT / confidence head `q`**: drives halting during training. Exact match of the whole trajectory, as in the paper,
-  is practically unreachable on noisy market data, and with the step limit the first step is only a 3-way choice, so
-  its target is still open (Phase 2). At inference its main role shifts from picking a sample (best-Q) to a possible
-  weighting / size-scaling signal.
+- **ACT / confidence head `q`** (`act` config): predicts a **tolerance match** with the oracle, trained with BCE
+  (weight 0.5 as in the paper): `q = 1` if the mean |rounded predicted level − oracle level| over the first `m` steps
+  is ≤ `τ` (defaults `τ` = 0.1, `m` = all H; `src.oracle.tolerance_match`). This replaces the paper's exact match,
+  which is practically unreachable on market trajectories, while keeping its meaning ("the prediction is already close
+  enough"), so halting during training works as in the paper.
+- **q at inference: not used by default.** The traded allocation stays the plain mean over samples; best-Q and
+  q-weighted averaging (`inference.aggregation: best_q | q_weighted`) are ablations on val.
 - **Pseudotargets** (Appendix D): included as a switch. The paper's justification assumes one solution per problem,
   which does not hold here (the same past can lead to different oracle trajectories), so their effect must be checked
   with an ablation.
@@ -173,6 +201,22 @@ Findings at 5m:
 - Data quality: 731,993 bars without gaps; 31 zero-volume flat bars (runs up to 55 min, e.g. 2021-03-02) are exchange
   maintenance filled in by Binance and currently count as valid (negligible).
 
+### Oracle upper-bound sweep (val split, 5m bars)
+Reduced grid, planning cost 0.05%, same decision bars for all points (2024-01-03 .. 2024-12-31; buy & hold 0.88,
+Sharpe 1.63). Results: `outputs/sweep_oracle/20260915-175514/`.
+
+| max step | net PnL (H = 16 / 32 / 64) | Sharpe (H = 64) | turnover/bar | bars per direction (H = 16 / 32 / 64) |
+|----------|----------------------------|-----------------|--------------|---------------------------------------|
+| 0.1      | 23.50 / 24.69 / 24.81      | 60.7            | 0.064        | 16.0 / 18.5 / 19.4                    |
+| 0.2      | 33.11 / 33.32 / 33.32      | 81.2            | 0.112        | 9.9 / 10.5 / 10.5                     |
+| 0.3      | 39.30 / 39.36 / 39.36      | 95.2            | 0.152        | 15.7 / 16.1 / 16.1                    |
+
+The 1h conclusions carry over: the horizon saturates by `H` ≈ 32 (64 loses nothing), larger steps buy headroom with
+more turnover, and every setting leaves ≥ 27× buy & hold's PnL. Defaults stay at max step 0.1, `H` = 64.
+Caveat on "bars per direction": it counts sign changes, and a step of 0.2 crosses exactly through 0 (0.2 → 0 → -0.2,
+two sign changes) while 0.3 can jump from 0.1 to -0.2 (one), so the metric is not monotone in the step size; turnover
+is the cleaner smoothness measure.
+
 ### Baseline results (val split, 1h bars — superseded by the 5m results above)
 2024-01-25 .. 2024-12-31, 1h bars, cost 0.05%, starting flat. PnL is additive in units of notional. BTC rose strongly
 in 2024, so buy & hold is a high bar on this split. `free` = no step limit at execution (default), `clip` = executed
@@ -240,13 +284,10 @@ Cluster / cloud GPUs are available, so paper-scale models and hyperparameter swe
 - Walk-forward evaluation.
 
 ## Open questions
-- **Confidence head target.** With the step limit the first target is one of `a_0 - 0.1`, `a_0`, `a_0 + 0.1`
-  (snapped to the grid), so first-step accuracy is only a 3-way direction choice. Candidates: agreement with the
-  oracle over the first k steps or at the readout step, PnL of the sampled trajectory relative to the oracle, per-step
-  accuracy threshold. Its inference role (weighting / size scaling vs. best-Q) follows from that choice.
+- **Tolerance `τ` of the confidence head**: 0.1 is a first guess; check on train/val how often it is reached at
+  different flow steps (too rare → halting never triggers, too common → halting too early).
 - **Readout step**: step 1 vs. later steps / prefix mean (to be compared on val with a trained model).
 - **Choice of `max_step` and `H`**: upper-bound sweep done (see Evaluation → Oracle upper-bound sweep); defaults
   confirmed at 0.1 and 64, final max step to be decided with trained models (0.1 vs 0.2).
 - Earlier finding without the step limit: longer bar intervals do not smooth the oracle (returns grow with the
   interval; 4h holds ~2.0 bars, 1d ~1.8 bars at 0.05%); only a higher cost does.
-- Scale of the return features: only log volume is standardized per window so far; raw log returns are ~1e-2.

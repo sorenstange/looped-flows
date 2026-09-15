@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from src.oracle import bar_returns, make_levels, oracle_trajectory, trajectory_pnl
+from src.oracle import bar_returns, make_levels, oracle_trajectory, tolerance_match, trajectory_pnl
 
 LEVELS = make_levels(3)
 
@@ -54,6 +54,15 @@ def test_max_step_ramps_into_a_trend():
     path, _ = oracle_trajectory(returns, torch.zeros(1), levels, cost=0.0005, max_step=0.1)
     expected = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.0, 1.0]
     assert levels[path][0].tolist() == pytest.approx(expected)
+
+
+def test_tolerance_match():
+    target = torch.tensor([[0.1, 0.2, 0.3, 0.4], [0.1, 0.2, 0.3, 0.4]], dtype=torch.float64)
+    predicted = torch.tensor([[0.1, 0.2, 0.3, 0.8],  # mean error 0.1 over all steps
+                              [0.0, 0.0, 0.0, 0.0]], dtype=torch.float64)  # mean error 0.25
+    assert tolerance_match(predicted, target, tolerance=0.1).tolist() == [True, False]
+    assert tolerance_match(predicted, target, tolerance=0.05).tolist() == [False, False]
+    assert tolerance_match(predicted, target, tolerance=0.15, steps=2).tolist() == [True, True]
 
 
 def test_make_levels():

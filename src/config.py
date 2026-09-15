@@ -30,7 +30,9 @@ class DataConfig:
 @dataclass
 class FeatureConfig:
     lookback: int = 256  # context bars per sample
-    standardize: List[str] = field(default_factory=lambda: ["log_volume"])  # z-scored over each window
+    scaling: str = "rolling"  # rolling: trailing-window scaling | window: log volume z-scored per sample window
+    rolling_window: int = 2016  # bars of trailing statistics (1 week at 5m); also used by log_vol_to_cost
+    clip: Optional[float] = 10.0  # clip context features to [-clip, clip]; null = no clipping
 
 
 @dataclass
@@ -79,10 +81,18 @@ class BacktestConfig:
 
 
 @dataclass
+class ActConfig:
+    """Confidence head q (the paper's ACT head): halting during training, optional use at inference."""
+    tolerance: float = 0.1  # q target: mean |rounded predicted level - oracle level| <= tolerance
+    steps: Optional[int] = None  # compare the first m trajectory steps; null = all H
+    loss_weight: float = 0.5  # weight λ of the BCE loss (paper: 0.5)
+
+
+@dataclass
 class InferenceConfig:
     """How a trained model's sampled trajectories become the traded allocation (see src.policies.readout_allocation)."""
     samples: int = 16  # K trajectories sampled per decision
-    aggregation: str = "mean"  # mean over the K samples | best_q (the sample with the highest confidence score)
+    aggregation: str = "mean"  # mean over the K samples | best_q (highest confidence score) | q_weighted
     readout: str = "step"  # step: expected level at readout_step | prefix_mean: mean over steps 1..readout_step
     readout_step: int = 1  # 1-based trajectory step; 1 = next bar's planned position
 
@@ -103,6 +113,7 @@ class Config:
     splits: SplitConfig = field(default_factory=SplitConfig)
     loader: LoaderConfig = field(default_factory=LoaderConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
+    act: ActConfig = field(default_factory=ActConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
     oracle_sweep: OracleSweepConfig = field(default_factory=OracleSweepConfig)
     output_dir: str = "outputs"
@@ -143,7 +154,6 @@ def _load_yaml_chain(path: Path, seen: tuple[Path, ...] = ()) -> list:
 
 def validate(cfg: Config) -> None:
     from src.data import interval_to_timedelta
-    from src.features import FEATURE_NAMES
     from src.policies import POLICY_NAMES
 
     def check(ok: bool, message: str) -> None:
@@ -153,8 +163,9 @@ def validate(cfg: Config) -> None:
     interval_to_timedelta(cfg.data.interval)
     check(cfg.data.market in ("futures", "spot"), f"data.market={cfg.data.market!r}")
     check(cfg.features.lookback > 1, "features.lookback must be > 1")
-    unknown = set(cfg.features.standardize) - set(FEATURE_NAMES)
-    check(not unknown, f"features.standardize has unknown features {sorted(unknown)}; known: {FEATURE_NAMES}")
+    check(cfg.features.scaling in ("rolling", "window"), f"features.scaling={cfg.features.scaling!r}")
+    check(cfg.features.rolling_window >= 2, "features.rolling_window must be >= 2")
+    check(cfg.features.clip is None or cfg.features.clip > 0, "features.clip must be null or > 0")
     check(cfg.oracle.horizon > 0, "oracle.horizon must be > 0")
     check(cfg.oracle.cost >= 0, "oracle.cost must be >= 0")
     check(cfg.oracle.num_levels >= 2, "oracle.num_levels must be >= 2")
@@ -176,9 +187,12 @@ def validate(cfg: Config) -> None:
     baselines = cfg.backtest.baselines
     check(0 < baselines.ma_fast < baselines.ma_slow, "backtest.baselines needs 0 < ma_fast < ma_slow")
     check(baselines.momentum_window > 0, "backtest.baselines.momentum_window must be > 0")
+    check(cfg.act.tolerance >= 0, "act.tolerance must be >= 0")
+    check(cfg.act.steps is None or 1 <= cfg.act.steps <= cfg.oracle.horizon, "act.steps must lie in 1..oracle.horizon")
+    check(cfg.act.loss_weight >= 0, "act.loss_weight must be >= 0")
     inference = cfg.inference
     check(inference.samples >= 1, "inference.samples must be >= 1")
-    check(inference.aggregation in ("mean", "best_q"), f"inference.aggregation={inference.aggregation!r}")
+    check(inference.aggregation in ("mean", "best_q", "q_weighted"), f"inference.aggregation={inference.aggregation!r}")
     check(inference.readout in ("step", "prefix_mean"), f"inference.readout={inference.readout!r}")
     check(1 <= inference.readout_step <= cfg.oracle.horizon, "inference.readout_step must lie in 1..oracle.horizon")
     sweep = cfg.oracle_sweep

@@ -40,8 +40,11 @@ over 21 levels in [-1, 1] for BTCUSDT perpetuals, trained on a cost-aware, rate-
 - `src/config.py`: config schema (dataclasses), `load_config`, `save_config`, `parse_args`, `validate`
 - `src/data.py`: Binance kline download (`fetch_ohlcv`), parquet cache with incremental top-up (`load_ohlcv`),
   regular time grid with a `valid` flag per bar (`clean_ohlcv`)
-- `src/features.py`: per-bar stationary features (`FEATURE_NAMES`, `bar_features`), per-window z-scoring
-- `src/oracle.py`: timing convention (see module docstring), `bar_returns`, `trajectory_pnl`, `oracle_stats`, and the
+- `src/features.py`: `FEATURE_NAMES` (6 channels: log return, high/low vs close, taker-buy share, log volume,
+  `log_vol_to_cost`), `raw_bar_features`, `bar_features` (trailing rolling scaling or per-window mode; NaN during the
+  warmup), `standardize_windows`. No open-based feature: perpetual bars open at the previous close.
+- `src/oracle.py`: timing convention (see module docstring), `bar_returns`, `trajectory_pnl`, `oracle_stats`,
+  `tolerance_match` (confidence-head target), and the
   DP split in two: `oracle_rest_values` (backward pass, independent of a_0, batched over windows) and `oracle_step`
   (choose one step given the position); `oracle_trajectory` combines them. The backtest must reuse `trajectory_pnl` /
   the same convention.
@@ -73,8 +76,8 @@ over 21 levels in [-1, 1] for BTCUSDT perpetuals, trained on a cost-aware, rate-
   (`<output_dir>/<script>/<timestamp>/config.yaml`), so any result can be reproduced from that file alone.
 
 ## Invariants: check these in every change touching data, oracle or backtest
-1. **No lookahead.** Model inputs at decision bar t use only bars ≤ t. Feature normalization (e.g. the volume z-score)
-   uses only the window itself, never global or future statistics.
+1. **No lookahead.** Model inputs at decision bar t use only bars ≤ t. Feature normalization uses trailing statistics
+   up to the bar itself (or the sample window), never global, train-set or future statistics.
 2. **Timing convention.** Allocation `a_t` is decided at the close of bar t and earns `r_{t+1}`. The oracle, the
    backtest and the baselines must all use the same convention and the same cost formula `c·|a_t − a_{t−1}|`.
 3. **Oracle is exact.** DP over (time × level), starting from a continuous `a_0 ∈ [-1, 1]`, no terminal cost, with

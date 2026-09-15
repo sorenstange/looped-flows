@@ -15,7 +15,7 @@ def make_bars(n: int = 2000, start: str = "2024-01-01", interval: str = "1h", se
     return pd.DataFrame({
         "open": open_, "high": high, "low": low, "close": close, "volume": volume,
         "quote_volume": volume * close, "trades": rng.integers(100, 1000, n).astype(float),
-        "taker_buy_volume": volume / 2,
+        "taker_buy_volume": volume * rng.uniform(0.3, 0.7, n),
     }, index=index)
 
 

@@ -6,6 +6,7 @@ import torch
 from src.backtest import History, Policy, performance, run_backtest
 from src.config import load_config
 from src.dataset import MarketData
+from src.features import FEATURE_NAMES
 from src.oracle import make_levels, oracle_trajectory, trajectory_pnl
 from src.policies import MACrossoverPolicy, MomentumPolicy, OraclePolicy, make_policy, readout_allocation
 
@@ -15,7 +16,7 @@ def toy_market(returns, valid=None) -> MarketData:
     close = 100 * np.cumprod(np.nan_to_num(returns) + 1)
     n = len(returns)
     return MarketData(pd.date_range("2024-01-01", periods=n, freq="h", tz="UTC"), close,
-                      np.zeros((n, 5), dtype=np.float32), returns,
+                      np.zeros((n, len(FEATURE_NAMES)), dtype=np.float32), returns,
                       np.ones(n, dtype=bool) if valid is None else np.asarray(valid))
 
 
@@ -148,6 +149,9 @@ def test_readout_allocation():
         ((0.5 + 1.0 + 1.0) / 3 + (-0.5 - 1.0 + 0.0) / 3) / 2)
     assert readout_allocation(probs, levels, aggregation="best_q", scores=scores) == pytest.approx(-0.5)
     assert readout_allocation(probs, levels, readout_step=3, aggregation="best_q", scores=scores) == pytest.approx(0.0)
+    assert readout_allocation(probs, levels, aggregation="q_weighted", scores=scores) == pytest.approx(
+        (0.2 * 0.5 + 0.9 * -0.5) / 1.1)
+    assert readout_allocation(probs, levels, aggregation="q_weighted", scores=torch.zeros(2)) == pytest.approx(0.0)
     with pytest.raises(ValueError):
         readout_allocation(probs, levels, aggregation="best_q")
 

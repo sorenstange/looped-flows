@@ -101,6 +101,19 @@ def oracle_trajectory(returns: torch.Tensor, a0: torch.Tensor, levels: torch.Ten
     return path, trajectory_pnl(lv[path], returns, a0.to(torch.float64), cost)
 
 
+def tolerance_match(predicted: torch.Tensor, target: torch.Tensor, tolerance: float,
+                    steps: int | None = None) -> torch.Tensor:
+    """Confidence-head target: whether a predicted trajectory is close enough to the oracle.
+
+    predicted, target: (B, H) positions (float64 level values from `make_levels`, e.g. of the rounded prediction and
+    the oracle path; float32 levels can miss the tolerance by rounding). Returns a (B,) bool tensor: mean
+    |predicted - target| over the first `steps` steps (all if None) is at most `tolerance`.
+    """
+    steps = predicted.shape[1] if steps is None else steps
+    error = (predicted[:, :steps].to(torch.float64) - target[:, :steps].to(torch.float64)).abs().mean(dim=1)
+    return error <= tolerance + STEP_TOL
+
+
 def oracle_stats(path: torch.Tensor, levels: torch.Tensor, a0: torch.Tensor, pnl: torch.Tensor) -> dict:
     """Summary statistics of a batch of oracle trajectories (for sanity-checking targets)."""
     positions = levels.to(torch.float64)[path]

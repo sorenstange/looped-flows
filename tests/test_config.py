@@ -31,9 +31,10 @@ def test_save_and_reload_roundtrip(tmp_path):
 
 @pytest.mark.parametrize("override", [
     "data.interval=1x", "oracle.return_type=pct", "oracle.num_levels=1", "oracle.max_step=0.05",
-    "features.standardize=[nope]",
+    "features.scaling=zscore", "features.rolling_window=1", "features.clip=0",
     "splits.val_start=2026-01-01", "oracle.cost=-0.1", "inference.readout_step=0", "inference.readout_step=65",
-    "inference.aggregation=median", "inference.readout=last", "inference.samples=0",
+    "inference.aggregation=median", "inference.readout=last", "inference.samples=0", "act.tolerance=-0.1",
+    "act.steps=0", "act.steps=65", "act.loss_weight=-1",
 ])
 def test_invalid_values_are_rejected(override):
     with pytest.raises(ValueError):

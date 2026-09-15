@@ -34,18 +34,22 @@ model selection and sweeps use train / val.
 
 - [x] **Switch to 5m bars** (user): `data.interval: 5m`; lookback 256, `H` = 64, max step 0.1 kept per bar; baselines
   scaled to the same wall-clock windows (MA 288 / 2016, momentum 2016); val backtest rerun, results in `vision.md`
-- [ ] **Re-run the oracle upper-bound sweep at 5m** with a reduced grid (the full 75-point grid would take ~2.5 h at
-  5m), e.g. max step {0.1, 0.2, 0.3} × `H` {16, 32, 64}, to confirm that the 1h conclusions carry over
+- [x] **Re-run the oracle upper-bound sweep at 5m** with a reduced grid (max step {0.1, 0.2, 0.3} × `H` {16, 32, 64},
+  ~17 min): 1h conclusions carry over, defaults kept; results in `vision.md`
 - [ ] Optional data cleaning: flag zero-volume flat bars (exchange maintenance, 31 bars at 5m) as invalid
 
 ## Phase 2 — Remaining design decisions before modelling
 - [x] **How the traded allocation is read out**: decided (user) — expected level, averaged over K samples (default
   K = 16, `inference.aggregation: mean`; best-Q as comparison), at a configurable readout (`inference.readout`,
   `inference.readout_step`, default step 1); implemented as `src.policies.readout_allocation`
-- [ ] **ACT / confidence head target**: with the step limit the first step is a 3-way choice; candidates: agreement
-  with the oracle over the first k steps or at the readout step, PnL of the sampled trajectory vs oracle, per-step
-  accuracy threshold; also decides its inference role (weighting / size scaling vs best-Q)
-- [ ] **Return feature scale**: standardize log returns / range features per window, or a fixed train-set scale
+- [x] **ACT / confidence head target**: decided (user) — tolerance match, mean |rounded predicted level − oracle
+  level| ≤ τ over the first m steps (`act.tolerance` 0.1, `act.steps` all H, BCE weight 0.5); `src.oracle.tolerance_match`.
+  q is not used for trading by default; `best_q` / `q_weighted` aggregation are ablations
+- [x] **Return feature scale**: decided (user) — rolling scaling with a trailing window (default 1 week = 2016 bars):
+  price features ÷ trailing RMS of log returns, log volume trailing z-score, new `log_vol_to_cost` channel, clip ±10;
+  `features.scaling: window` kept for comparison. Checked on 5m data (train/val scale consistent)
+- [x] **Replace the redundant `log_open_close` channel** (equals `-log_return` on perpetuals): replaced by the
+  taker-buy share of volume, trailing z-score (user)
 
 ## Phase 3 — Model and training (CPU smoke tests first)
 - [ ] **Backbone** (`src/modules.py`): input projections (context features, `a_0`, noisy one-hot trajectory), time
@@ -68,8 +72,9 @@ model selection and sweeps use train / val.
   learnability) and compare on val
 - [ ] Inference-time scaling on val: flow steps `n`, stochasticity `γ`, samples `K`
 - [ ] Readout on val: step 1 vs. later steps (j ≈ 5–10) vs. prefix mean
-- [ ] Ablations on val: pseudotargets on/off, ODE vs. SDE, mean vs. best-Q aggregation, execution with vs. without
-  the step limit
+- [ ] Ablations on val: pseudotargets on/off, ODE vs. SDE, mean vs. best-Q vs. q-weighted aggregation, execution with
+  vs. without the step limit
+- [ ] Tune the confidence-head tolerance τ: check how often the tolerance match is reached per flow step
 - [ ] Optional: no-trade band (skip rebalances smaller than a threshold), if small per-bar changes of the expected
   position add noticeable fees
 
