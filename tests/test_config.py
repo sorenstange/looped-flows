@@ -23,7 +23,8 @@ def test_extends_and_overrides(tmp_path):
 
 
 def test_save_and_reload_roundtrip(tmp_path):
-    cfg = load_config(CONFIGS / "smoke.yaml", ["oracle.num_levels=5", "oracle.max_step=null"])
+    cfg = load_config(CONFIGS / "smoke.yaml", ["oracle.num_levels=5", "oracle.max_step=null",
+                                               "oracle_sweep.max_steps=[0.5,null]"])
     save_config(cfg, tmp_path / "config.yaml")
     assert load_config(tmp_path / "config.yaml") == cfg
 
@@ -31,7 +32,8 @@ def test_save_and_reload_roundtrip(tmp_path):
 @pytest.mark.parametrize("override", [
     "data.interval=1x", "oracle.return_type=pct", "oracle.num_levels=1", "oracle.max_step=0.05",
     "features.standardize=[nope]",
-    "splits.val_start=2026-01-01", "oracle.cost=-0.1",
+    "splits.val_start=2026-01-01", "oracle.cost=-0.1", "inference.readout_step=0", "inference.readout_step=65",
+    "inference.aggregation=median", "inference.readout=last", "inference.samples=0",
 ])
 def test_invalid_values_are_rejected(override):
     with pytest.raises(ValueError):

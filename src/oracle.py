@@ -28,9 +28,55 @@ def trajectory_pnl(positions: torch.Tensor, returns: torch.Tensor, a0: torch.Ten
     return (positions * returns - cost * (positions - previous).abs()).sum(dim=1)
 
 
+TIE_EPS = 1e-10  # added to the cost inside the DP so that ties are broken toward lower turnover
+STEP_TOL = 1e-9  # float tolerance for the max_step constraint
+
+
+def _move_cost(distance: torch.Tensor, cost: float, max_step: float | None) -> torch.Tensor:
+    """DP cost of moving `distance`; moves larger than `max_step` cost infinity."""
+    result = (cost + TIE_EPS) * distance
+    return result if max_step is None else result.masked_fill(distance > max_step + STEP_TOL, torch.inf)
+
+
+@torch.no_grad()
+def oracle_rest_values(returns: torch.Tensor, levels: torch.Tensor, cost: float, max_step: float | None = None,
+                       first_only: bool = False) -> torch.Tensor:
+    """Backward DP over (B, H) return windows.
+
+    rest[:, k, j] is the best PnL of steps k+1..H-1 (0-based) given the position at step k is `levels[j]`, so
+    rest[:, H-1] = 0. Returns (B, H, K), or only rest[:, 0] of shape (B, K) if `first_only`.
+
+    The values do not depend on a_0, so they can be computed for many windows at once. Appending zero returns to a
+    window does not change them (holding is always feasible and free), so shorter windows can be zero-padded.
+    """
+    returns = returns.to(torch.float64)
+    lv = levels.to(torch.float64)
+    batch, horizon = returns.shape
+    switch = _move_cost((lv[:, None] - lv[None, :]).abs(), cost, max_step)  # (K_prev, K_next)
+    rest = torch.zeros(batch, len(lv), dtype=torch.float64)
+    stored = [rest]
+    for k in range(horizon - 1, 0, -1):
+        rest = ((lv * returns[:, k:k + 1] + rest)[:, None, :] - switch).amax(dim=2)
+        if not first_only:
+            stored.append(rest)
+    return rest if first_only else torch.stack(stored[::-1], dim=1)
+
+
+@torch.no_grad()
+def oracle_step(step_return: torch.Tensor, rest: torch.Tensor, position: torch.Tensor, levels: torch.Tensor,
+                cost: float, max_step: float | None = None) -> torch.Tensor:
+    """Optimal level index for one step given the step's return (B,), the rest values of that step (B, K) and the
+    position before the step (B,)."""
+    lv = levels.to(torch.float64)
+    move = _move_cost((lv - position.to(torch.float64)[:, None]).abs(), cost, max_step)
+    if not torch.isfinite(move).any(dim=1).all():
+        raise ValueError("some position has no level within max_step")
+    return (lv * step_return.to(torch.float64)[:, None] - move + rest).argmax(dim=1)
+
+
 @torch.no_grad()
 def oracle_trajectory(returns: torch.Tensor, a0: torch.Tensor, levels: torch.Tensor, cost: float,
-                      max_step: float | None = None, tie_eps: float = 1e-10) -> tuple[torch.Tensor, torch.Tensor]:
+                      max_step: float | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """Solve max_p sum_k p_k R_k - cost |p_k - p_{k-1}| over p_k in `levels` exactly, by dynamic programming.
 
     Args:
@@ -41,33 +87,18 @@ def oracle_trajectory(returns: torch.Tensor, a0: torch.Tensor, levels: torch.Ten
     Returns:
         (B, H) indices into `levels` of the optimal path, and (B,) its net PnL (float64).
 
-    Ties are broken toward lower turnover by running the DP with `cost + tie_eps`; this can only change the choice
-    between paths whose true PnL differs by less than tie_eps * turnover. The PnL is recomputed with the real cost.
+    Ties are broken toward lower turnover by running the DP with `cost + TIE_EPS`; this can only change the choice
+    between paths whose true PnL differs by less than TIE_EPS * turnover. The PnL is recomputed with the real cost.
     """
     returns = returns.to(torch.float64)
-    a0 = a0.to(torch.float64)
     lv = levels.to(torch.float64)
-    batch, horizon = returns.shape
-    penalty = cost + tie_eps
-
-    def move_cost(distance: torch.Tensor) -> torch.Tensor:  # forbidden moves cost infinity
-        result = penalty * distance
-        return result if max_step is None else result.masked_fill(distance > max_step + 1e-9, torch.inf)
-
-    switch = move_cost((lv[:, None] - lv[None, :]).abs())  # (K_prev, K_next)
-    value = lv * returns[:, :1] - move_cost((lv - a0[:, None]).abs())  # (B, K): best PnL ending at each level
-    if not torch.isfinite(value).any(dim=1).all():
-        raise ValueError("some a0 has no level within max_step")
-    backpointer = torch.zeros(batch, horizon, len(lv), dtype=torch.long)
-    for k in range(1, horizon):
-        value, backpointer[:, k] = (value[:, :, None] - switch).max(dim=1)
-        value = value + lv * returns[:, k:k + 1]
-
-    path = torch.empty(batch, horizon, dtype=torch.long)
-    path[:, -1] = value.argmax(dim=1)
-    for k in range(horizon - 1, 0, -1):
-        path[:, k - 1] = backpointer[:, k].gather(1, path[:, k:k + 1]).squeeze(1)
-    return path, trajectory_pnl(lv[path], returns, a0, cost)
+    rest = oracle_rest_values(returns, lv, cost, max_step)
+    path = torch.empty(returns.shape, dtype=torch.long)
+    position = a0.to(torch.float64)
+    for k in range(returns.shape[1]):
+        path[:, k] = oracle_step(returns[:, k], rest[:, k], position, lv, cost, max_step)
+        position = lv[path[:, k]]
+    return path, trajectory_pnl(lv[path], returns, a0.to(torch.float64), cost)
 
 
 def oracle_stats(path: torch.Tensor, levels: torch.Tensor, a0: torch.Tensor, pnl: torch.Tensor) -> dict:

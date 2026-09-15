@@ -1,4 +1,4 @@
-# Small, fast configuration for local smoke tests (half a year of 1h bars, short windows).
+# Small, fast configuration for local smoke tests (half a year of bars at the default interval, short windows).
 extends: default.yaml
 
 data:

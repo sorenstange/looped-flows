@@ -3,7 +3,7 @@
 
 data:
   symbol: BTCUSDT
-  interval: 1h            # <n>m | <n>h | <n>d | <n>w
+  interval: 5m            # <n>m | <n>h | <n>d | <n>w
   market: futures         # futures (USDT-M perpetuals) | spot
   start: "2019-10-01"     # UTC; skips the placeholder bars right after the BTCUSDT perp listing
   end: null               # UTC, exclusive; null = up to the last closed bar
@@ -32,5 +32,29 @@ loader:
   batch_size: 256
   num_workers: 0
   seed: 0
+
+backtest:
+  split: val              # train | val | test (test only for the final evaluation)
+  cost: null              # cost per unit of turnover; null = oracle.cost
+  enforce_max_step: false # clip every executed move of every policy to oracle.max_step
+  clipped_baselines: true # also run the rule-based baselines with the step limit, as "<name>_clip"
+  initial_position: 0.0
+  policies: [flat, buy_hold, random, ma_crossover, momentum, oracle]
+  seed: 0                 # for the random policy
+  baselines:
+    ma_fast: 288          # bars in the fast moving average (1 day at 5m)
+    ma_slow: 2016         # bars in the slow moving average (1 week at 5m)
+    momentum_window: 2016 # bars over which the momentum return is measured (1 week at 5m)
+
+inference:                # how sampled trajectories become the traded allocation
+  samples: 16             # K trajectories sampled per decision
+  aggregation: mean       # mean over the K samples | best_q (sample with the highest confidence score)
+  readout: step           # step: expected level at readout_step | prefix_mean: mean over steps 1..readout_step
+  readout_step: 1         # 1-based trajectory step; 1 = next bar's planned position
+
+oracle_sweep:             # grid for scripts/sweep_oracle.py (receding-horizon oracle backtests)
+  max_steps: [0.1, 0.2, 0.3, 0.5, null]
+  horizons: [8, 16, 32, 64, 128]
+  costs: [0.0005, 0.001, 0.002]  # oracle planning costs; the backtest charges backtest.cost
 
 output_dir: outputs

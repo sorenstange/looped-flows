@@ -22,6 +22,7 @@ SPLITS = ("train", "val", "test")
 @dataclass
 class MarketData:
     times: pd.DatetimeIndex  # (T,) bar open times
+    close: np.ndarray  # (T,) float64
     features: np.ndarray  # (T, F) float32, see src.features.FEATURE_NAMES
     returns: np.ndarray  # (T,) float64, return of bar t from close t-1 to close t
     valid: np.ndarray  # (T,) bool
@@ -29,10 +30,11 @@ class MarketData:
     @classmethod
     def from_bars(cls, bars: pd.DataFrame, return_type: str) -> "MarketData":
         """Build from the output of `clean_ohlcv`."""
+        close = bars["close"].to_numpy(dtype=np.float64)
         features = bar_features(bars)
-        returns = bar_returns(bars["close"].to_numpy(), return_type)
+        returns = bar_returns(close, return_type)
         valid = bars["valid"].to_numpy() & np.isfinite(features[:, 1:]).all(axis=1)
-        return cls(bars.index, features, returns, valid)
+        return cls(bars.index, close, features, returns, valid)
 
     @classmethod
     def load(cls, cfg: Config) -> "MarketData":
