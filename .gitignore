@@ -1,0 +1,32 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Market data and caches
+data/
+*.parquet
+*.feather
+
+# Training artifacts
+checkpoints/
+*.pt
+*.ckpt
+*.safetensors
+
+# Experiment outputs
+runs/
+outputs/
+wandb/
+logs/
+*.log
+
+# Notebooks / tooling
+.ipynb_checkpoints/
+.pytest_cache/

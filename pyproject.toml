@@ -1,0 +1,18 @@
+[project]
+name = "looped-flows"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "omegaconf>=2.3.1",
+    "pandas>=3.0.5",
+    "python-binance>=1.0.37",
+    "requests>=2.34.2",
+    "torch>=2.14.0",
+    "torchvision>=0.29.0",
+]
+[tool.setuptools.packages.find]
+where = ["src"] 
