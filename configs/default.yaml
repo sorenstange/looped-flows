@@ -1,0 +1,36 @@
+# Base configuration. Other configs inherit from it with `extends: default.yaml` and override only what differs.
+# Any value can also be overridden on the command line, e.g. `oracle.cost=0.001 data.interval=15m`.
+
+data:
+  symbol: BTCUSDT
+  interval: 1h            # <n>m | <n>h | <n>d | <n>w
+  market: futures         # futures (USDT-M perpetuals) | spot
+  start: "2019-10-01"     # UTC; skips the placeholder bars right after the BTCUSDT perp listing
+  end: null               # UTC, exclusive; null = up to the last closed bar
+  cache_dir: data/raw
+  update: true            # fetch missing bars from Binance; false = cache only
+
+features:
+  lookback: 256           # context bars per sample
+  standardize: [log_volume]  # features z-scored over each window
+
+oracle:
+  horizon: 64             # trajectory length H in bars
+  cost: 0.0005            # cost per unit of turnover (Binance USDT-M taker fee)
+  num_levels: 21          # allocation levels evenly spaced over [-1, 1] (21 -> steps of 0.1)
+  max_step: 0.1           # max position change per bar, incl. the move from a_0; null = unlimited
+  return_type: simple     # simple | log
+  initial_position: uniform  # a_0 distribution: uniform in [-1, 1] | zero | levels
+
+splits:
+  val_start: "2024-01-01"
+  test_start: "2025-01-01"
+  purge: null             # bars skipped at the start of val/test; null = lookback + horizon
+  train_stride: 1
+
+loader:
+  batch_size: 256
+  num_workers: 0
+  seed: 0
+
+output_dir: outputs

@@ -13,7 +13,7 @@ recurrent state is carried across progressively less noisy steps. We map this on
 |------------------------|---------------------------------------------------------------------|
 | Problem `c`            | Past OHLCV window (lookback) + current position `a_0`               |
 | Solution `x1`          | Oracle allocation trajectory over the future horizon `H`            |
-| Token vocabulary `V`   | Allocation levels {-1, 0, 1}                                        |
+| Token vocabulary `V`   | 21 allocation levels {-1, -0.9, ..., 0.9, 1}                        |
 | Multiple valid answers | Different plausible futures -> different sampled trajectories      |
 
 ## Training target: the oracle
@@ -22,7 +22,8 @@ in the horizon, maximizes PnL net of transaction costs:
 
 ```
 max_a  Σ_{t=1..H} a_t · r_{t+1} − c · |a_t − a_{t−1}|
-s.t.   a_t ∈ {-1, 0, 1}
+s.t.   a_t ∈ {-1, -0.9, ..., 0.9, 1}
+       |a_t − a_{t−1}| ≤ 0.1        (including the first move from a_0)
 ```
 
 - `r_{t+1}` is the return of the bar following allocation `a_t`, `c` the proportional cost per unit of turnover
@@ -32,20 +33,39 @@ s.t.   a_t ∈ {-1, 0, 1}
   it is sampled **uniformly from [-1, 1]** per example so the model learns the cost of switching from any position.
 - **No terminal cost**: the position may remain open at the end of the horizon (avoids a bias toward flattening late
   in the trajectory).
+- **Max step** (`oracle.max_step`, default 0.1): the position can change by at most 0.1 per bar, so going from flat to
+  full takes 10 bars and a full flip 20. This rate limit is what shapes the targets (see below); forbidden moves are
+  excluded from the DP.
 - Solved exactly with dynamic programming over (time × level).
-- Costs are what make the oracle non-trivial: without them it would just be `sign(r_{t+1})`. Costs create holding
-  periods and flat regimes when a move does not cover the round trip.
+- Without the step limit, the oracle is bang-bang: a linear objective with linear costs only ever picks -1, 0 or 1,
+  and at 1h / 0.05% it flips every ~2.3 bars, close to `sign(r_{t+1})`. Finer levels alone change nothing; the step
+  limit is what turns targets into smooth ramps that follow multi-bar trends.
+
+**Oracle regimes on the 1h train split** (a_0 = 0, 5000 evenly spaced samples, `H` = 64):
+
+| Variant                | cost  | short/flat/long | mean \|pos\| | at ±1 | turnover/bar | bars per level | bars per direction | oracle PnL |
+|------------------------|-------|-----------------|-------------|-------|--------------|----------------|--------------------|------------|
+| 3 levels, no limit     | 0.05% | 49/0/51 %       | 1.00        | 99.7% | 0.855        | 2.3            | 2.3                | 0.243      |
+| 3 levels, no limit     | 0.2%  | 47/1/51 %       | 0.99        | 98.5% | 0.451        | 4.2            | 4.2                | 0.183      |
+| 21 levels, no limit    | 0.05% | identical to 3 levels                                                                                     |
+| 21 levels, step 0.1    | 0.05% | 45/4/51 %       | 0.59        | 15.7% | 0.083        | 1.2            | 12.5               | 0.073      |
+| 21 levels, step 0.1    | 0.2%  | 45/4/51 %       | 0.61        | 20.6% | 0.062        | 1.6            | 15.5               | 0.066      |
 
 ## Representation
-- Allocations are **three discrete levels {-1, 0, 1}**. With linear PnL and linear turnover costs the oracle essentially
-  only ever uses these, so finer levels would add vocabulary without adding targets.
+- Allocations are **21 discrete levels**, evenly spaced over [-1, 1] (`oracle.num_levels`). With the step limit the
+  oracle uses intermediate levels in its ramps.
 - One-hot encoded, exactly as the paper's categorical flow: Gaussian-noise interpolant on one-hots, cross-entropy
   denoising loss.
 - Fractional exposure emerges from model uncertainty: the expected level `Σ p_level · level` lies in [-1, 1].
 
 ## Market and data
-- **Binance USDT-M perpetual futures, BTCUSDT** to start (shorting is native).
-- Bar interval, lookback length and horizon `H` are configuration parameters (omegaconf), chosen by experiment.
+- **Binance USDT-M perpetual futures, BTCUSDT** to start (shorting is native). Data from 2019-10-01, skipping the
+  placeholder bars right after the September 2019 listing.
+- Bar interval, lookback length and horizon `H` are configuration parameters (YAML configs in `configs/`), chosen by
+  experiment. Defaults to start from: 1h bars, lookback 256, `H` = 64.
+- Returns are **simple returns** of each bar (close to close); positions have constant notional, so PnL is additive.
+- **Missing or malformed bars** are put on a regular time grid (filled flat at the previous close) and flagged
+  invalid; any sample whose context or horizon touches an invalid bar is dropped.
 - **Splits**: a single chronological train / validation / test split, with a purge gap of at least `lookback + H` bars
   between consecutive sets so that no window or oracle horizon overlaps across them.
 
@@ -53,7 +73,7 @@ s.t.   a_t ∈ {-1, 0, 1}
 **Inputs (conditioning `c`)**: stationary per-bar features computed from the lookback window:
 - log return `log(close_t / close_{t−1})`
 - open, high and low relative to close (log ratios)
-- log volume, z-scored over the window
+- log volume (`log1p`), z-scored over the window
 - plus the current position `a_0`
 
 **Backbone**: a single non-causal transformer with rotary position embeddings over one joint sequence
@@ -119,5 +139,13 @@ Cluster / cloud GPUs are available, so paper-scale models and hyperparameter swe
 - Walk-forward evaluation.
 
 ## Open questions
-- First milestone and its scope.
-- Default bar interval / lookback / `H` to start sweeps from.
+- **Step limit at execution.** The oracle never moves more than 0.1 per bar, but the executed expected level is not
+  constrained. Clip the executed allocation to `a_0 ± max_step` (consistent with the targets), or let the model move
+  freely?
+- **First step is nearly determined by `a_0`.** With the step limit the first target is one of `a_0 - 0.1`, `a_0`,
+  `a_0 + 0.1` (snapped to the grid), so first-step accuracy and the first-step ACT head reduce to a 3-way direction
+  choice. The ACT target and the evaluation of trajectory quality may need rethinking.
+- **Choice of `max_step` and `H`**: with 0.1 per bar a full flip takes 20 of the 64 bars. Both are worth sweeping.
+- Earlier finding without the step limit: longer bar intervals do not smooth the oracle (returns grow with the
+  interval; 4h holds ~2.0 bars, 1d ~1.8 bars at 0.05%); only a higher cost does.
+- Scale of the return features: only log volume is standardized per window so far; raw log returns are ~1e-2.

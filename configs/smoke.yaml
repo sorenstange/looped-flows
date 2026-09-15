@@ -1,0 +1,19 @@
+# Small, fast configuration for local smoke tests (half a year of 1h bars, short windows).
+extends: default.yaml
+
+data:
+  start: "2024-01-01"
+  end: "2024-07-01"
+
+features:
+  lookback: 64
+
+oracle:
+  horizon: 16
+
+splits:
+  val_start: "2024-05-01"
+  test_start: "2024-06-01"
+
+loader:
+  batch_size: 64
