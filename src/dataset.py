@@ -57,6 +57,15 @@ def valid_anchors(valid: np.ndarray, lookback: int, horizon: int, lo: int, hi: i
     return anchors[clean][::stride]
 
 
+def context_windows(market: MarketData, anchors: np.ndarray, cfg: Config) -> torch.Tensor:
+    """(B, lookback, F) model input for decisions at the close of the `anchors` bars: bars T-lookback+1..T, scaled
+    and clipped exactly as in training. Shared by the dataset and the model backtest."""
+    bars = np.asarray(anchors, dtype=np.int64)[:, None] + np.arange(1 - cfg.features.lookback, 1)
+    channels = [FEATURE_NAMES.index(name) for name in ACTIVITY_FEATURES] if cfg.features.scaling == "window" else []
+    context = standardize_windows(torch.from_numpy(market.features[bars]), channels)
+    return context.clamp(-cfg.features.clip, cfg.features.clip) if cfg.features.clip is not None else context
+
+
 class WindowDataset(Dataset):
     """(context, current position, oracle trajectory) samples for a fixed set of anchors.
 
@@ -68,15 +77,12 @@ class WindowDataset(Dataset):
     def __init__(self, market: MarketData, anchors: np.ndarray, cfg: Config, seed: int = 0):
         self.market = market
         self.anchors = np.asarray(anchors, dtype=np.int64)
-        self.lookback = cfg.features.lookback
+        self.cfg = cfg
         self.horizon = cfg.oracle.horizon
         self.cost = cfg.oracle.cost
         self.max_step = cfg.oracle.max_step
         self.levels = make_levels(cfg.oracle.num_levels)
         self.initial_position = cfg.oracle.initial_position
-        self.standardize = ([FEATURE_NAMES.index(name) for name in ACTIVITY_FEATURES]
-                            if cfg.features.scaling == "window" else [])
-        self.clip = cfg.features.clip
         self.seed = seed
         self.epoch = 0
 
@@ -89,12 +95,8 @@ class WindowDataset(Dataset):
     def __getitem__(self, index: int | list[int]) -> dict[str, torch.Tensor]:
         batched = not np.isscalar(index)
         anchors = self.anchors[np.atleast_1d(np.asarray(index, dtype=np.int64))]
-        context_bars = anchors[:, None] + np.arange(1 - self.lookback, 1)
         future_bars = anchors[:, None] + np.arange(1, self.horizon + 1)
-
-        context = standardize_windows(torch.from_numpy(self.market.features[context_bars]), self.standardize)
-        if self.clip is not None:
-            context = context.clamp(-self.clip, self.clip)
+        context = context_windows(self.market, anchors, self.cfg)
         returns = torch.from_numpy(self.market.returns[future_bars])
         a0 = self.initial_positions(anchors)
         target, pnl = oracle_trajectory(returns, a0, self.levels, self.cost, self.max_step)

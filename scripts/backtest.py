@@ -1,11 +1,12 @@
-"""Backtest the configured policies on one split and save metrics, per-bar positions and an equity-curve plot.
-
-Saves to <output_dir>/backtest/<timestamp>/.
+"""Backtest the configured policies (and optionally a trained model) on one split; save metrics, per-bar positions
+and an equity-curve plot to <output_dir>/backtest/<timestamp>/.
 
     uv run python -m scripts.backtest --config configs/default.yaml backtest.split=val oracle.max_step=0.2
+    uv run python -m scripts.backtest --config configs/smoke.yaml backtest.checkpoint=outputs/train/<run>/checkpoints/step_0000300.pt
 """
 
 import json
+import time
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -20,7 +21,9 @@ import pandas as pd
 from src.backtest import decision_range, performance, run_backtest
 from src.config import load_config, parse_args, save_config
 from src.dataset import MarketData
+from src.model_backtest import ModelDecider, check_compatible, run_model_backtest
 from src.policies import RULE_BASED, make_policy
+from src.training import load_model, resolve_device
 
 
 def main() -> None:
@@ -29,7 +32,7 @@ def main() -> None:
     market = MarketData.load(cfg)
     _, end = decision_range(market, cfg)
     policies = [make_policy(name, cfg, market, last_bar=end) for name in cfg.backtest.policies]
-    start, _ = decision_range(market, cfg, warmup=max(policy.warmup for policy in policies))
+    start, _ = decision_range(market, cfg, warmup=max((policy.warmup for policy in policies), default=0))
     cost = cfg.backtest.cost if cfg.backtest.cost is not None else cfg.oracle.cost
     max_step = cfg.oracle.max_step if cfg.backtest.enforce_max_step else None
 
@@ -42,6 +45,16 @@ def main() -> None:
                                          cfg.oracle.max_step, cfg.backtest.initial_position),
                             policy=f"{policy.name}_clip")
                     for policy in policies if policy.name in RULE_BASED]
+    if cfg.backtest.checkpoint is not None:
+        model_cfg, model = load_model(cfg.backtest.checkpoint, resolve_device(cfg.backtest.device))
+        check_compatible(model_cfg, cfg)
+        decider = ModelDecider(model, model_cfg, cfg, market)
+        tic = time.perf_counter()
+        results.append(run_model_backtest(decider, start, end, cost, max_step, cfg.backtest.initial_position,
+                                          cfg.backtest.chains, cfg.backtest.burn_in,
+                                          name=f"model_{model_cfg.train.method}"))
+        print(f"model backtest ({model_cfg.train.method}, K={decider.samples}, n={decider.flow_steps}, "
+              f"{cfg.backtest.chains} chains) took {time.perf_counter() - tic:.0f}s")
     metrics = {result.policy: performance(result, cfg.data.interval) for result in results}
 
     out_dir = Path(cfg.output_dir) / "backtest" / datetime.now().strftime("%Y%m%d-%H%M%S")

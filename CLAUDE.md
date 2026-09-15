@@ -72,7 +72,10 @@ over 21 levels in [-1, 1] for BTCUSDT perpetuals, trained on a cost-aware, rate-
   `save_checkpoint` / `load_model`
 - `src/sampling.py`: `sample` (Alg. 2: K samples, noise backtracking with γ, recurrent state carried), `predict`
   (dispatch per `train.method`), `backtrack`; `training.sample_metrics` evaluates generated trajectories
-- still to come under `src/`: the model policy for the backtest
+- `src/model_backtest.py`: `ModelDecider`, `run_model_backtest` (parallel chains + burn-in; `chains=1` is exact
+  sequential), `ModelPolicy` (sequential reference), `check_compatible`. Model inputs must always come from
+  `dataset.context_windows`, never a re-implementation
+- model backtest: `uv run python -m scripts.backtest --config <cfg> backtest.checkpoint=<path/to/step_*.pt>`
 - Sampling is expensive (n denoiser calls × K samples per decision): on CPU only with `configs/smoke.yaml` settings
 - Teacher-forced late-step flow metrics are inflated (the interpolant nearly contains the target); judge models by
   first-step metrics, sampled trajectories and backtests

@@ -13,39 +13,48 @@ POLICY_NAMES = ("flat", "buy_hold", "random", "ma_crossover", "momentum", "oracl
 RULE_BASED = ("buy_hold", "random", "ma_crossover", "momentum")  # baselines also run with the step limit
 
 
-def readout_allocation(probs: torch.Tensor, levels: torch.Tensor, readout: str = "step", readout_step: int = 1,
-                       aggregation: str = "mean", scores: torch.Tensor | None = None) -> float:
-    """Traded allocation from K sampled trajectories of a model.
+def readout_allocations(probs: torch.Tensor, levels: torch.Tensor, readout: str = "step", readout_step: int = 1,
+                        aggregation: str = "mean", scores: torch.Tensor | None = None) -> torch.Tensor:
+    """Traded allocations from K sampled trajectories per decision.
 
     Args:
-        probs: (K, H, L) predicted level probabilities per sample and trajectory step.
+        probs: (B, K, H, L) predicted level probabilities per decision, sample and trajectory step.
         levels: (L,) allocation levels.
         readout: "step" uses the expected level at `readout_step`; "prefix_mean" averages steps 1..readout_step.
         readout_step: 1-based trajectory step.
         aggregation: "mean" averages the per-sample values (the Monte Carlo expected position; uncertainty across
             samples becomes position size); "best_q" takes the sample with the highest confidence score; "q_weighted"
-            averages with weights proportional to the scores.
-        scores: (K,) non-negative confidence scores, required for "best_q" and "q_weighted".
+            averages with weights proportional to the scores (plain mean if all scores are 0).
+        scores: (B, K) non-negative confidence scores, required for "best_q" and "q_weighted".
+    Returns:
+        (B,) float64 allocations.
     """
-    expected = probs.to(torch.float64) @ levels.to(torch.float64)  # (K, H)
+    expected = probs.to(torch.float64) @ levels.to(device=probs.device, dtype=torch.float64)  # (B, K, H)
     if readout == "step":
-        per_sample = expected[:, readout_step - 1]
+        per_sample = expected[..., readout_step - 1]
     elif readout == "prefix_mean":
-        per_sample = expected[:, :readout_step].mean(dim=1)
+        per_sample = expected[..., :readout_step].mean(dim=-1)
     else:
         raise ValueError(f"unknown readout {readout!r}")
     if aggregation == "mean":
-        return per_sample.mean().item()
+        return per_sample.mean(dim=-1)
     if aggregation not in ("best_q", "q_weighted"):
         raise ValueError(f"unknown aggregation {aggregation!r}")
     if scores is None:
         raise ValueError(f"aggregation={aggregation!r} needs confidence scores")
     if aggregation == "best_q":
-        return per_sample[scores.argmax()].item()
+        return per_sample.gather(-1, scores.argmax(dim=-1, keepdim=True)).squeeze(-1)
     weights = scores.to(torch.float64).clamp(min=0)
-    if weights.sum() <= 0:
-        return per_sample.mean().item()
-    return (per_sample * weights).sum().item() / weights.sum().item()
+    total = weights.sum(dim=-1)
+    weighted = (per_sample * weights).sum(dim=-1) / total.clamp(min=1e-12)
+    return torch.where(total > 0, weighted, per_sample.mean(dim=-1))
+
+
+def readout_allocation(probs: torch.Tensor, levels: torch.Tensor, readout: str = "step", readout_step: int = 1,
+                       aggregation: str = "mean", scores: torch.Tensor | None = None) -> float:
+    """`readout_allocations` for a single decision: probs (K, H, L), scores (K,)."""
+    return readout_allocations(probs[None], levels, readout, readout_step, aggregation,
+                               None if scores is None else scores[None]).item()
 
 
 class ConstantPolicy(Policy):

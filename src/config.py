@@ -76,8 +76,14 @@ class BacktestConfig:
     initial_position: float = 0.0
     policies: List[str] = field(default_factory=lambda: [
         "flat", "buy_hold", "random", "ma_crossover", "momentum", "oracle"])
-    seed: int = 0  # for the random policy
+    seed: int = 0  # for the random policy and the model's sampling noise
     baselines: BaselineConfig = field(default_factory=BaselineConfig)
+    checkpoint: Optional[str] = None  # model checkpoint to backtest alongside the policies
+    device: str = "auto"  # for the model: auto | cpu | cuda
+    chains: int = 256  # model backtest: parallel chains over the decision bars (1 = fully sequential)
+    burn_in: int = 64  # bars at the start of every chain but the first, run for their a_0 and then discarded
+    inference_samples: Optional[int] = 4  # K for model backtests (cheap dev default); null = inference.samples
+    inference_flow_steps: Optional[int] = 16  # n for model backtests (cheap dev default); null = inference.flow_steps
 
 
 @dataclass
@@ -264,6 +270,10 @@ def validate(cfg: Config) -> None:
     check(not unknown, f"backtest.policies has unknown policies {sorted(unknown)}; known: {POLICY_NAMES}")
     baselines = cfg.backtest.baselines
     check(0 < baselines.ma_fast < baselines.ma_slow, "backtest.baselines needs 0 < ma_fast < ma_slow")
+    check(cfg.backtest.device in ("auto", "cpu", "cuda"), f"backtest.device={cfg.backtest.device!r}")
+    check(cfg.backtest.chains >= 1 and cfg.backtest.burn_in >= 0, "backtest.chains must be >= 1, burn_in >= 0")
+    check(all(v is None or v >= 1 for v in (cfg.backtest.inference_samples, cfg.backtest.inference_flow_steps)),
+          "backtest.inference_samples / inference_flow_steps must be null or >= 1")
     check(baselines.momentum_window > 0, "backtest.baselines.momentum_window must be > 0")
     model = cfg.model
     check(min(model.width, model.heads, model.layers, model.mlp_width, model.cycles, model.inner_steps,

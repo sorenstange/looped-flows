@@ -86,9 +86,25 @@ model selection and sweeps use train / val.
   - smoke checkpoints (300 CPU steps) on val: direct predictor first-step MAE 0.25, looped flow 0.49 (chance level;
     its t = 0 denoising had not learned yet), both with negative PnL: too little training to judge the method.
     Sampling at K = 16, n = 32 on CPU took ~24 min for 512 decisions, so sampled evaluation and backtests need GPUs
-- [ ] **Model policy** for the backtest: sample K trajectories per bar, feed their level probabilities (and confidence
+- [x] **Model policy** for the backtest: sample K trajectories per bar, feed their level probabilities (and confidence
   scores) to `readout_allocation`; batch decisions efficiently where possible
-- [ ] **Smoke run** on `configs/smoke.yaml` on CPU: loss decreases, sampler produces valid trajectories, backtest runs
+  - `src/model_backtest.py`: `ModelDecider` (context windows shared with training via `dataset.context_windows` →
+    `predict` → batched `readout_allocations`), `run_model_backtest` with parallel chains and burn-in (user decision),
+    `ModelPolicy` as the sequential reference, `check_compatible` (checkpoint vs. run config, incl. `oracle.cost`
+    because it enters `log_vol_to_cost`); `backtest.checkpoint` in `scripts/backtest.py`
+  - development backtests default to K = 4, n = 16 (`backtest.inference_samples` / `inference_flow_steps`, user
+    decision); final evaluation uses the `inference` settings
+  - tests: one chain equals the sequential policy; chains equal sequential when a_0 does not feed back; full burn-in
+    reproduces the sequential run in every chain
+  - smoke direct checkpoint on smoke val (May 2024): runs in 153 s on CPU; net PnL -0.17 with 0.21 fees (turnover
+    0.048 per bar from rebalancing the expected position) vs. buy & hold +0.17
+- [x] **Smoke run** on `configs/smoke.yaml` on CPU: loss decreases, sampler produces valid trajectories, backtest runs
+  - both methods train (wandb), sample and backtest end to end on real 5m data
+  - looped-flow smoke checkpoint, K = 2, n = 4, smoke val (May 2024): net PnL -0.56, almost all fees (turnover 0.129
+    per bar, mean |position| 0.10): with an untrained flow and only 2 samples the averaged expected position is mostly
+    sampling noise that gets traded every 5 minutes. Took 1217 s on CPU for 8.6k decisions
+  - implication for Phase 4: fees from bar-to-bar noise in the traded position are the first thing to watch; levers
+    are more samples K, a later readout step / prefix mean, and the no-trade band
 
 ## Phase 4 — Experiments (cluster)
 - [ ] Cluster setup: CUDA torch, run scripts, output syncing

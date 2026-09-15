@@ -42,7 +42,13 @@ backtest:
   clipped_baselines: true # also run the rule-based baselines with the step limit, as "<name>_clip"
   initial_position: 0.0
   policies: [flat, buy_hold, random, ma_crossover, momentum, oracle]
-  seed: 0                 # for the random policy
+  seed: 0                 # for the random policy and the model's sampling noise
+  checkpoint: null        # model checkpoint to backtest alongside the policies
+  device: auto            # for the model: auto | cpu | cuda
+  chains: 256             # model backtest: parallel chains over the decision bars (1 = fully sequential)
+  burn_in: 64             # bars at the start of every chain but the first, run for their a_0 and then discarded
+  inference_samples: 4    # K for model backtests (cheap dev default); null = inference.samples
+  inference_flow_steps: 16  # n for model backtests (cheap dev default); null = inference.flow_steps
   baselines:
     ma_fast: 288          # bars in the fast moving average (1 day at 5m)
     ma_slow: 2016         # bars in the slow moving average (1 week at 5m)
