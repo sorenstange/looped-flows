@@ -6,7 +6,7 @@
 #BSUB -R "select[gpu80gb]"
 
 ### -- set the job Name --
-#BSUB -J jepa_train
+#BSUB -J looped_flow
 
 ### -- ask for number of cores (default: 1) --
 #BSUB -n 4
@@ -36,5 +36,13 @@
 
 # -- end of LSF options --
 
-cd /zhome/d3/0/155487/looped-flows
-uv run scripts/train.py
+REPO=/zhome/d3/0/155487/looped-flows
+cd "$REPO" || exit 1
+mkdir -p outputs/cluster
+
+# data.update=false: compute nodes have no outbound network, so the parquet cache
+# under data/raw must already be populated (see documents/cluster.md).
+uv run python -m scripts.train \
+  --config configs/default.yaml \
+  train.method=looped_flow \
+  data.update=false

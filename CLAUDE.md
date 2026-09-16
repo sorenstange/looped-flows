@@ -11,6 +11,8 @@ over 21 levels in [-1, 1] for BTCUSDT perpetuals, trained on a cost-aware, rate-
 - Don't silently depart from `vision.md`. If the spec seems wrong or underspecified, say so and ask.
 - `documents/roadmap.md` is the prioritized checklist of work. When asked what's next, take the top unchecked item.
   Check items off when they land, and add new items where they belong in the order.
+- `documents/cluster.md` is the DTU HPC runbook: environment, getting the git-ignored data and `.env` across,
+  `bsub < train.sh`, pulling checkpoints back. Keep it current when the cluster workflow changes.
 - `documents/paper.md` is a cleaned Markdown transcription of the paper (`2026_suleymanzade_looped-flows.pdf`). Read
   or grep it instead of the PDF. Equations were re-typeset by hand, so check the PDF if exact notation matters.
   Sections that matter most: Alg. 1/2 (training/inference), Eq. 9 (loss), Eq. 10 (ACT), App. A (TRM-style
