@@ -30,6 +30,7 @@ over 21 levels in [-1, 1] for BTCUSDT perpetuals, trained on a cost-aware, rate-
   - data prep / oracle report: `uv run python -m scripts.prepare_data --config configs/smoke.yaml`
   - backtest: `uv run python -m scripts.backtest --config configs/default.yaml data.update=false`
   - oracle upper-bound sweep: `uv run python -m scripts.sweep_oracle --config configs/default.yaml data.update=false`
+  - inspection plots: `uv run python -m scripts.inspect_model --config configs/default.yaml inspect.checkpoint=<path/to/step_*.pt>`
   - training: `uv run python -m scripts.train --config configs/smoke.yaml data.update=false` (outputs in
     `outputs/train/<timestamp>-<method>/`: config.yaml, metrics.jsonl, checkpoints/); add `train.overfit_samples=64`
     for a memorization check. The smoke config uses softmax + AdamW; the paper defaults are for the cluster.
@@ -85,7 +86,10 @@ over 21 levels in [-1, 1] for BTCUSDT perpetuals, trained on a cost-aware, rate-
   or commit it). Tests disable it via `WANDB_MODE=disabled` in `tests/conftest.py`; set `wandb.enabled=false` for
   throwaway local runs
 - Paper-size models are far too slow for CPU (~8 s per forward+backward at batch 8); use `configs/smoke.yaml` locally
-- `scripts/`: entry points (`prepare_data.py`, `backtest.py`, `sweep_oracle.py`); `tests/`: pytest suite (synthetic data, no network;
+- `scripts/inspect_model.py`: qualitative plots for a checkpoint (`inspect` config): planned vs oracle trajectories,
+  level-probability heatmaps, MAE/accuracy vs trajectory step against the "keep `a_0`" and "always flat" baselines,
+  step-1 calibration, a position-vs-price timeline via `run_model_backtest`, and an inference-time scaling curve
+- `scripts/`: entry points (`prepare_data.py`, `backtest.py`, `sweep_oracle.py`, `inspect_model.py`); `tests/`: pytest suite (synthetic data, no network;
   `conftest.make_bars`, `test_backtest.toy_market`)
 - Raw and cached market data goes under `data/`, checkpoints under `checkpoints/`, and run outputs under `runs/` or
   `outputs/`; all of these are git-ignored. Never commit data, checkpoints or run outputs.

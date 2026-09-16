@@ -167,6 +167,23 @@ class InferenceConfig:
 
 
 @dataclass
+class InspectConfig:
+    """Qualitative inspection plots for a trained checkpoint (scripts/inspect_model.py)."""
+    checkpoint: Optional[str] = None  # checkpoint to inspect; null = backtest.checkpoint
+    split: str = "val"  # train | val | test (test only for the final evaluation)
+    decisions: int = 2048  # decisions, evenly spaced over the split, behind the aggregate plots
+    examples: int = 6  # individual decisions drawn as trajectory panels and probability heatmaps
+    timeline_bars: int = 2016  # contiguous bars in the position-vs-price timeline (1 week at 5m)
+    timeline_start: Optional[str] = None  # UTC start of that window; null = its largest absolute price move
+    scaling_curve: bool = True  # also plot accuracy against sampler steps n and samples K (costs extra sampling)
+    scaling_decisions: int = 256  # decisions used for the scaling curve (it re-samples per grid point)
+    samples: Optional[int] = None  # K for the main plots; null = inference.samples
+    flow_steps: Optional[int] = None  # n for the main plots; null = inference.flow_steps
+    device: str = "auto"  # auto | cpu | cuda
+    seed: int = 0
+
+
+@dataclass
 class OracleSweepConfig:
     """Grid for scripts/sweep_oracle.py: receding-horizon oracle backtests over these oracle settings."""
     max_steps: List[Optional[float]] = field(default_factory=lambda: [0.1, 0.2, 0.3, 0.5, None])
@@ -188,6 +205,7 @@ class Config:
     act: ActConfig = field(default_factory=ActConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
+    inspect: InspectConfig = field(default_factory=InspectConfig)
     oracle_sweep: OracleSweepConfig = field(default_factory=OracleSweepConfig)
     output_dir: str = "outputs"
 
@@ -312,6 +330,13 @@ def validate(cfg: Config) -> None:
     check(inference.aggregation in ("mean", "best_q", "q_weighted"), f"inference.aggregation={inference.aggregation!r}")
     check(inference.readout in ("step", "prefix_mean"), f"inference.readout={inference.readout!r}")
     check(1 <= inference.readout_step <= cfg.oracle.horizon, "inference.readout_step must lie in 1..oracle.horizon")
+    inspect = cfg.inspect
+    check(inspect.split in ("train", "val", "test"), f"inspect.split={inspect.split!r}")
+    check(inspect.device in ("auto", "cpu", "cuda"), f"inspect.device={inspect.device!r}")
+    check(min(inspect.decisions, inspect.examples, inspect.timeline_bars, inspect.scaling_decisions) >= 1,
+          "inspect.decisions / examples / timeline_bars / scaling_decisions must be >= 1")
+    check(all(v is None or v >= 1 for v in (inspect.samples, inspect.flow_steps)),
+          "inspect.samples / flow_steps must be null or >= 1")
     sweep = cfg.oracle_sweep
     check(all(step is None or step >= spacing - 1e-9 for step in sweep.max_steps),
           f"oracle_sweep.max_steps must be null or >= the level spacing {spacing:g}")

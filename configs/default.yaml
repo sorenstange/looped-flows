@@ -118,6 +118,20 @@ inference:                # how sampled trajectories become the traded allocatio
   readout: step           # step: expected level at readout_step | prefix_mean: mean over steps 1..readout_step
   readout_step: 1         # 1-based trajectory step; 1 = next bar's planned position
 
+inspect:                  # qualitative inspection plots (scripts/inspect_model.py)
+  checkpoint: null        # checkpoint to inspect; null = backtest.checkpoint
+  split: val              # train | val | test (test only for the final evaluation)
+  decisions: 2048         # decisions, evenly spaced over the split, behind the aggregate plots
+  examples: 6             # individual decisions drawn as trajectory panels and probability heatmaps
+  timeline_bars: 2016     # contiguous bars in the position-vs-price timeline (1 week at 5m)
+  timeline_start: null    # UTC start of that window; null = its largest absolute price move
+  scaling_curve: true     # also plot accuracy against sampler steps n and samples K (costs extra sampling)
+  scaling_decisions: 256  # decisions used for the scaling curve (it re-samples per grid point)
+  samples: null           # K for the main plots; null = inference.samples
+  flow_steps: null        # n for the main plots; null = inference.flow_steps
+  device: auto            # auto | cpu | cuda
+  seed: 0
+
 oracle_sweep:             # grid for scripts/sweep_oracle.py (receding-horizon oracle backtests)
   max_steps: [0.1, 0.2, 0.3, 0.5, null]
   horizons: [8, 16, 32, 64, 128]
