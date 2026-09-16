@@ -109,7 +109,9 @@ model selection and sweeps use train / val.
 ## Phase 4 — Experiments (cluster)
 - [ ] Cluster setup: CUDA torch, run scripts, output syncing
   - `documents/cluster.md` written (clone, CUDA torch, `scp` of the 39 MB parquet cache and `.env`, `bsub`, pulling
-    checkpoints back); `train.sh` submits `scripts.train` with `data.update=false`. Not yet verified on the cluster
+    checkpoints back); `train.sh` submits `scripts.train` with `data.update=false`
+  - `jobs/` holds one LSF script per experiment below (`jobs/README.md`), sharing `jobs/_common.sh`; the first
+    looped-flow run is training at ~2.4 it/s, and eval every 2000 steps costs several minutes of it
 - [ ] Train direct predictor and looped flow on the default config; compare on val
 - [ ] Loss and optimizer: StableMax + Adam-atan2 (paper) vs. softmax + AdamW at full scale (the paper setting learned
   far slower in the CPU smoke run)

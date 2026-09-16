@@ -11,6 +11,8 @@ over 21 levels in [-1, 1] for BTCUSDT perpetuals, trained on a cost-aware, rate-
 - Don't silently depart from `vision.md`. If the spec seems wrong or underspecified, say so and ask.
 - `documents/roadmap.md` is the prioritized checklist of work. When asked what's next, take the top unchecked item.
   Check items off when they land, and add new items where they belong in the order.
+- `jobs/` holds one LSF batch script per Phase 4 experiment, sharing `jobs/_common.sh` (repo path, cache check,
+  `run` helper). See `jobs/README.md`; add a script there rather than running experiments ad hoc.
 - `documents/cluster.md` is the DTU HPC runbook: environment, getting the git-ignored data and `.env` across,
   `bsub < train.sh`, pulling checkpoints back. Keep it current when the cluster workflow changes.
 - `documents/paper.md` is a cleaned Markdown transcription of the paper (`2026_suleymanzade_looped-flows.pdf`). Read
